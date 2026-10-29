@@ -2,7 +2,7 @@
 
 역할: 시험 데이터 생성 도구 (엔진 실행에는 필요 없음). data/access_fake_r2.json, attacks_truth_r2.csv를 만든 스크립트.
 주의: 원본 BOLA-APP/engine/data/access_fake.json이 레포 안에 있어야 실행됨 (지금은 BOLA-APP이 레포 밖이라 재실행 불가,
-      결과 파일은 data/에 남아 있음)
+      결과 파일도 data/에서 지웠음)
 
 응답에 주인(user_id)이 없는 API를 사용:
   POST  /orders/{id}/cancel          → 응답 {id, order_number, status}        → resp_ids {"id": [...]}
@@ -47,6 +47,7 @@ rng = random.Random(SEED)
 
 
 def load():
+  """원본 가짜 로그(access_fake.json)를 줄 단위로 읽음"""
   logs = []
   with open(SRC_LOG, encoding="utf-8") as f:
     for line in f:
@@ -73,6 +74,7 @@ def order_owners(logs):
 
 
 def event(user, method, oid, ts, status=200):
+  """주문 취소(POST)나 배송 메모 변경(PATCH) Kong 로그 1건을 만듦"""
   action = "cancel" if method == "POST" else "delivery-memo"
   return {
     "time": datetime.fromtimestamp(ts / 1000, KST).isoformat(timespec="seconds"),
@@ -91,6 +93,7 @@ def event(user, method, oid, ts, status=200):
 
 
 def main():
+  """정상·공격(장부 있음)·공격(장부 없음) 이벤트를 원본 로그에 섞고 정답지와 함께 저장"""
   logs = load()
   start, end = logs[0]["started_at"], logs[-1]["started_at"]
   attack_start = end - 4 * 86400 * 1000                     # 기존 공격과 같은 '마지막 며칠'

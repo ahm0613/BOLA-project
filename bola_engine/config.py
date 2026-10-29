@@ -13,11 +13,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_config(path=None):
+  """config.yaml과 .env를 읽어 설정 딕셔너리를 만듦 (상대 경로는 bola-rule 폴더 기준으로 바꿈)"""
   load_dotenv(os.path.join(BASE_DIR, ".env"))
   with open(path or os.path.join(BASE_DIR, "config.yaml"), encoding="utf-8") as f:
     cfg = yaml.safe_load(f)
 
-  # 상대 경로는 PYTHON-ENGIN 폴더 기준으로
+  # 상대 경로는 bola-rule 폴더 기준으로
   for k, v in (cfg.get("paths") or {}).items():
     if not os.path.isabs(v):
       cfg["paths"][k] = os.path.join(BASE_DIR, v)

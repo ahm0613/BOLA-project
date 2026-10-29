@@ -14,12 +14,14 @@ BASE = os.getenv("KONG_URL", "http://localhost:8000")
 
 
 def login(user, password):
+  """Kong으로 로그인해 JWT를 받아 Authorization 헤더로 돌려줌"""
   r = requests.post(f"{BASE}/auth/login", json={"username": user, "password": password}, timeout=10)
   r.raise_for_status()
   return {"Authorization": f"Bearer {r.json()['accessToken']}"}
 
 
 def call(method, path, headers, expect, json=None):
+  """API를 한 번 호출하고 응답 코드와 기대 결과를 나란히 출력"""
   r = requests.request(method, f"{BASE}{path}", headers=headers, json=json, timeout=10)
   print(f"{r.status_code}  {method:6s} {path:32s} {expect}")
 

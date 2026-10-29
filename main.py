@@ -13,18 +13,21 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 
 import requests
 
 from bola_engine.config import load_config
 from bola_engine.evaluate import evaluate, evaluate_service_logs, summarize
 from bola_engine.ledger import Ledger
-from bola_engine.output import ViolationWriter
+from bola_engine.event import KST
+from bola_engine.output import JsonlWriter, ViolationWriter, daily_path
 from bola_engine.rules import Detector
 from bola_engine.sources import Checkpoint, IndexerSource, now_ms, read_files
 
 
 def make_source(cfg):
+  """config의 indexer 설정으로 Wazuh Indexer 접속 객체를 만듦"""
   ix = cfg["indexer"]
   return IndexerSource(ix["url"], ix["user"], ix["password"], ix["index"],
                        verify=ix["verify"], batch_size=ix["batch_size"],
@@ -48,15 +51,18 @@ def learn(cfg, source, checkpoint=None):
 
 
 def cmd_check(cfg, args):
+  """check 명령: Indexer에 접속해 bola-api-* 문서 수를 출력 (연결 확인용)"""
   source = make_source(cfg)
   print(f"{cfg['indexer']['url']}/{cfg['indexer']['index']} 문서 수: {source.count()}")
 
 
 def cmd_learn(cfg, args):
+  """learn 명령: 최근 로그로 장부(state/ledger.json)만 새로 만듦"""
   learn(cfg, make_source(cfg))
 
 
 def cmd_run(cfg, args):
+  """run 명령: 10초마다 Indexer의 새 로그를 읽어 탐지. 전체 API 로그와 위반을 요청 날짜별 파일에 쌓음"""
   source = make_source(cfg)
   ix = cfg["indexer"]
   checkpoint = Checkpoint(cfg["paths"]["checkpoint"], ix["overlap_sec"] * 1000).load()
@@ -72,17 +78,22 @@ def cmd_run(cfg, args):
     checkpoint.last_ms = now_ms()                         # 기록이 없으면 지금부터 탐지
 
   detector = Detector(cfg, ledger)
-  writer = ViolationWriter(cfg["paths"]["violations"])
-  print(f"실시간 탐지 시작 ({ix['poll_interval_sec']}초 간격). 위반 로그: {cfg['paths']['violations']}")
+  writer = ViolationWriter(cfg["paths"]["violations"], daily=True)
+  api_log = JsonlWriter(cfg["paths"]["api_logs"])           # 위반 여부와 관계없이 읽은 문서 전부
+  print(f"실시간 탐지 시작 ({ix['poll_interval_sec']}초 간격). 원본 요청 날짜별로 저장\n"
+        f"  위반 로그: {daily_path(cfg['paths']['violations'], 'YYYY-MM-DD')}\n"
+        f"  전체 API 로그: {daily_path(cfg['paths']['api_logs'], 'YYYY-MM-DD')}")
   try:
     while True:
       new = 0
       try:
-        for doc_id, ts, e in source.iter_range(checkpoint.since_ms()):
+        for doc_id, ts, e, src in source.iter_range(checkpoint.since_ms(), with_source=True):
           if not checkpoint.is_new(doc_id):
             continue
           checkpoint.mark(doc_id, ts)
           new += 1
+          day = (e or {}).get("time") or datetime.fromtimestamp(ts / 1000, KST).isoformat()
+          api_log.write(src, day[:10])
           if e is not None:
             for v in detector.process(e):
               writer.write(v)
@@ -98,7 +109,8 @@ def cmd_run(cfg, args):
     checkpoint.save()
     ledger.save(cfg["paths"]["ledger"])
     writer.close()
-    print(f"이번 실행 위반 {writer.count}건, 처리 {detector.counts}")
+    api_log.close()
+    print(f"이번 실행 위반 {writer.count}건, 전체 API 로그 {api_log.count}건, 처리 {detector.counts}")
 
 
 def cmd_replay(cfg, args):
@@ -135,6 +147,7 @@ def cmd_replay(cfg, args):
 
 
 def main():
+  """명령줄 인자(check / learn / run / replay)를 읽어 해당 명령을 실행"""
   p = argparse.ArgumentParser(description="Wazuh Indexer API 로그 기반 BOLA 탐지 엔진")
   p.add_argument("--config", help="설정 파일 경로 (기본: config.yaml)")
   sub = p.add_subparsers(dest="cmd", required=True)

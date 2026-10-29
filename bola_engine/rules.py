@@ -1,7 +1,7 @@
 """Python BOLA 룰 (Wazuh 룰로는 못 잡는, 기억이 필요한 판정)
 
 역할: 엔진의 핵심. Detector.process(이벤트)가 판정 → 장부 갱신 → 위반 목록 반환을 한 번에 한다.
-learn·run·replay 모드 모두 같은 Detector를 쓰므로 판정 결과가 모드와 관계없이 같다. 동작 설명은 RULE_FLOW.md.
+learn·run·replay 모드 모두 같은 Detector를 쓰므로 판정 결과가 모드와 관계없이 같다. 동작 설명은 docs/RULE_FLOW.md.
 
 BOLA-R1 응답 주인 불일치: 성공 응답에 담긴 객체 주인(owner_fields)이 요청자와 다름
 BOLA-R2 장부 주인 불일치: 응답에 주인 정보가 없으면 장부의 주인과 요청자를 비교
@@ -54,7 +54,9 @@ INCIDENT_RULES = {"BOLA-R4", "BOLA-R6"}   # 요청 한 건이 아니라 사용�
 
 
 class Detector:
+  """BOLA 판정기: 로그 1건씩 받아 R1~R6 룰로 판정하고, 판정하면서 장부도 채움"""
   def __init__(self, config, ledger):
+    """config의 룰 설정·주인 필드·목록 API·경로 주인을 읽어 판정 준비"""
     self.cfg = config
     self.ledger = ledger
     self.owner_fields = config.get("owner_fields") or {}
@@ -85,6 +87,7 @@ class Detector:
     self.r6_last = {}                                     # 같은 키 → 마지막 경보 시각ms (cooldown)
 
   def _enabled(self, rule_id):
+    """config.yaml에서 이 룰이 켜져 있는지 (기본은 켜짐)"""
     return (self.rule_cfg.get(rule_id) or {}).get("enabled", True)
 
   def _judgeable(self, e):
@@ -297,6 +300,7 @@ class Detector:
     return alerts
 
   def _learn(self, e, api, res, resp_owners, violated):
+    """판정이 끝난 요청에서 장부를 채움: 응답 속 주인 확정, 목록 응답 객체 추가, 방문 기록"""
     me = e["user_id"]
     # 1) 응답에 주인이 하나로 나오면 그 객체의 주인으로 확정 (공격 요청이라도 응답 속 주인은 사실)
     if res and len(resp_owners) == 1:
@@ -322,10 +326,12 @@ class Detector:
       self.ledger.visit(res[0], res[1], me, day_of(e))
 
   def _violation(self, rule_id, e, reason, evidence):
+    """위반 기록 1건(json)을 만듦: 요청 시각, 탐지 시각, 룰, 이유, 근거, 원본 요약, 출처"""
     rule = RULES[rule_id]
     severity = (self.rule_cfg.get(rule_id) or {}).get("severity", rule["severity"])
     return {
-      "detected_at": datetime.now(KST).isoformat(timespec="seconds"),
+      "event_time": e.get("time"),                                      # 요청이 실제로 일어난 시각 (Kong 로그)
+      "detected_at": datetime.now(KST).isoformat(timespec="seconds"),   # 엔진이 위반을 찾아낸 시각
       "message": f"이 로그는 {rule_id}({rule['name']}) 룰을 위반했습니다.",
       "rule": {"id": rule_id, "name": rule["name"], "severity": severity, "description": rule["description"]},
       "reason": reason,
@@ -346,9 +352,11 @@ def _ts_ms(e):
 
 
 def _iso(ms):
+  """ms 시각 → 한국 시간 ISO 문자열"""
   return datetime.fromtimestamp(ms / 1000, KST).isoformat(timespec="seconds")
 
 
 def _dur(ms):
+  """ms 길이 → '10분', '24시간' 같은 사람이 읽는 문자열"""
   sec = ms // 1000
   return f"{sec // 3600}시간" if sec >= 3600 and sec % 3600 == 0 else f"{sec // 60}분"

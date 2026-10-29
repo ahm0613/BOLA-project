@@ -3,7 +3,7 @@
 
 indexer:
   index: "bola-api-*"           # Kong API 로그만 모인 인덱스 (학원 Wazuh Indexer, 시간 필드는 timestamp)
-  poll_interval_sec: 10         # 실시간 모드에서 몇 초마다 새 로그를 가져올지
+  poll_interval_sec: 1          # 실시간 모드에서 몇 초마다 새 로그를 가져올지 (소수 가능, 예: 0.5)
   overlap_sec: 30               # Filebeat가 늦게 넣는 로그를 놓치지 않도록 겹쳐 읽는 구간
   batch_size: 500               # 한 번에 가져올 문서 수
 
@@ -14,7 +14,8 @@ learning:
 paths:
   ledger: state/ledger.json
   checkpoint: state/checkpoint.json
-  violations: output/violations.jsonl
+  violations: output/violations.jsonl          # run 모드: violations-YYYY-MM-DD.jsonl (원본 요청 날짜별)
+  api_logs: output/api_logs/api.jsonl          # run 모드: 읽은 전체 API 로그(Indexer _source) api-YYYY-MM-DD.jsonl
   replay_violations: output/replay_violations.jsonl
 
 exclude_roles: [admin]          # 관리자는 남의 객체 조회가 정상이므로 판정 제외

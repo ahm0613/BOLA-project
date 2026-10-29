@@ -1,0 +1,5 @@
+# 이미지에 넣지 않을 파일 (실행 결과, 테스트, 캐시)
+output/
+tests/
+__pycache__/
+README.md

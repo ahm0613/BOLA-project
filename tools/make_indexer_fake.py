@@ -58,6 +58,7 @@ rng = random.Random(42)
 
 # ---------------------------------------------------------------- 가상 DB
 def make_db():
+  """가상 DB 생성: 사용자(활성·비활성·관리자), 주소, 쿠폰, 주문, 결제"""
   db = {"users": {u: "user" for u in ACTIVE + INACTIVE}, "addresses": {}, "coupons": {},
         "orders": {}, "payments": {}}
   db["users"][ADMIN] = "admin"
@@ -88,14 +89,17 @@ def make_db():
 
 # ---------------------------------------------------------------- Kong body_filter와 같은 ID 추출
 def is_id_key(k):
+  """Kong extract_ids와 같은 기준으로 ID 같은 키인지 판단 (id, *_id, *Id, *_no)"""
   low = k.lower()
   return low == "id" or low.endswith("_id") or re.search(r"[a-z]Id$", k) is not None or low.endswith("_no")
 
 
 def extract_ids(data):
+  """응답 본문에서 ID 같은 키의 값을 모아 resp_ids를 만듦 (Kong body_filter Lua 흉내)"""
   out, seen = {}, set()
 
   def walk(v, path, depth):
+    """본문을 깊이 4까지 따라가며 ID 값을 모음 (목록은 앞 20개만)"""
     if not isinstance(v, (dict, list)) or depth > 4 or len(seen) >= 50:
       return
     if isinstance(v, list):
@@ -216,12 +220,15 @@ def to_indexer(e):
 
 
 class Writer:
+  """가짜 요청을 가상 API에 보내 Kong 로그 모양으로 모으고, 공격 요청은 정답지에 기록"""
   def __init__(self, db):
+    """db: make_db()로 만든 가상 DB"""
     self.db = db
     self.events = []
     self.truth = []
 
   def log(self, t, method, uri, me=None, role="user", scenario=None, status=None, api=None):
+    """요청 1건을 가상 API로 처리해 Kong 로그 1건을 만들고, scenario가 있으면 정답지에도 추가"""
     body = None
     if me is not None:
       api, status, body = call(self.db, me, role, method, uri)
@@ -253,6 +260,7 @@ class Writer:
 
 
 def step(t, lo=0.3, hi=4.0):
+  """t에서 lo~hi초 뒤의 시각 (요청 사이 간격)"""
   return t + timedelta(seconds=rng.uniform(lo, hi))
 
 
@@ -309,6 +317,7 @@ def normal_visit(w, me, t):
 
 
 def admin_visit(w, t):
+  """관리자가 여러 회원과 주문을 조회하는 세션 (exclude_roles로 판정 제외돼야 함)"""
   w.log(t, "POST", "/auth/login", status=200, api="auth-service")
   for _ in range(rng.randint(3, 8)):
     u = rng.choice(ACTIVE)
@@ -321,6 +330,7 @@ def admin_visit(w, t):
 
 # ---------------------------------------------------------------- 공격 시나리오
 def attacks(w):
+  """공격 시나리오(R1 빠른·느린 열거, R2·R3, R5, R6 403·404 스캔)를 넣음"""
   db = w.db
   day2 = START + DAY
 
@@ -394,6 +404,7 @@ def attacks(w):
 
 
 def main():
+  """가상 DB → 공격 → 정상 세션으로 목표 건수를 채우고 jsonl과 정답지 CSV로 저장"""
   p = argparse.ArgumentParser(description="bola-api-* 모양의 가짜 로그 생성")
   p.add_argument("--count", type=int, default=1000, help="대략적인 문서 수 (기본 1000)")
   args = p.parse_args()

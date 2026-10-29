@@ -1,0 +1,14 @@
+# 이미지에 넣지 않을 파일 (비밀 정보, 실행 결과, 로컬 가상환경 등)
+.env
+root-ca.pem
+.venv/
+.git/
+__pycache__/
+state/
+output/
+data/
+docs/
+tests/
+tools/
+CLAUDE.md
+smoke_attack.py

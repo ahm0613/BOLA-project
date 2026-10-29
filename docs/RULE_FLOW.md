@@ -245,7 +245,7 @@ R6는 R4와 마찬가지로 사용자 단위 경보(`INCIDENT_RULES`)라서, 요
 | 모드 | 장부 | 읽는 범위 | 위반 출력 |
 |---|---|---|---|
 | `learn` | 새로 만듦 | 최근 `learning.days`(7)일 | 하지 않음 (학습만) |
-| `run` | 파일이 없거나 `--relearn`이면 먼저 `learn` | 체크포인트 이후 새 로그, `poll_interval_sec`(10초)마다 | `output/violations.jsonl` |
+| `run` | 파일이 없거나 `--relearn`이면 먼저 `learn` | 체크포인트 이후 새 로그, `poll_interval_sec`(10초)마다 | `output/violations-YYYY-MM-DD.jsonl` + 전체 API 로그 `output/api_logs/api-YYYY-MM-DD.jsonl` (요청 날짜별) |
 | `replay` | 빈 장부에서 시작해 읽으면서 채움 | 지정한 파일 전체 (요청 시각순, `request_id` 중복 제거) | `output/replay_violations.jsonl` + 요약 |
 
 `run`의 체크포인트 동작:

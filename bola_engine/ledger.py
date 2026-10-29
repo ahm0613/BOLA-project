@@ -12,7 +12,9 @@ from collections import Counter, defaultdict
 
 
 class Ledger:
+  """객체별 주인 장부: 응답으로 확인한 주인(confirmed) + 날짜별 방문 기록으로 추정한 주인(inferred)"""
   def __init__(self, min_share=0.7):
+    """min_share: 방문 날짜 중 한 사용자가 이 비율 이상을 차지해야 주인으로 추정"""
     self.min_share = min_share
     self.confirmed = defaultdict(dict)                                       # resource → key → owner
     self.visits = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))  # resource → key → user → {day}
@@ -24,6 +26,7 @@ class Ledger:
     return added
 
   def visit(self, resource, key, user, day):
+    """사용자가 그 날 이 객체에 성공적으로 접근했다고 기록 (주인 추정용)"""
     self.visits[resource][key][user].add(day)
 
   def visited_by(self, resource, key, user):
@@ -45,12 +48,14 @@ class Ledger:
     return None, None                                     # 여러 사람이 비슷하게 조회 → 공유 객체로 보고 판단 보류
 
   def stats(self):
+    """장부 크기 요약 (확인된 객체 수, 방문 기록이 있는 객체 수)"""
     return {
       "confirmed": sum(len(v) for v in self.confirmed.values()),
       "visited": sum(len(v) for v in self.visits.values()),
     }
 
   def save(self, path):
+    """장부를 json 파일로 저장 (임시 파일에 쓴 뒤 바꿔치기)"""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     data = {
       "min_share": self.min_share,
@@ -65,6 +70,7 @@ class Ledger:
 
   @classmethod
   def load(cls, path, min_share=0.7):
+    """json 파일에서 장부를 읽어 Ledger 객체로 만듦"""
     ledger = cls(min_share)
     with open(path, encoding="utf-8") as f:
       data = json.load(f)

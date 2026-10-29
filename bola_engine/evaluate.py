@@ -23,6 +23,7 @@ def _split(violations):
 
 
 def evaluate(violations, truth_path):
+  """위반 결과를 정답지 CSV와 비교해 정탐·미탐·오탐, 정밀도·재현율을 출력하고 돌려줌"""
   violations, incidents = _split(violations)
   with open(truth_path, encoding="utf-8") as f:
     truth = {r["request_id"]: r for r in csv.DictReader(f) if r["label"] == "BOLA"}
@@ -122,6 +123,7 @@ def load_service_truth(service_log_dir):
 
 
 def evaluate_service_logs(events, violations, service_log_dir):
+  """위반 결과를 API 서버 로그의 owner_id(실제 주인)와 비교해 채점"""
   violations, _ = _split(violations)
   truth_all, logged = load_service_truth(service_log_dir)
   seen = {e.get("request_id") for e in events}

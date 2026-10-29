@@ -1,0 +1,18 @@
+# bola-rule 탐지 엔진 실행 설정
+# 사용법 (bola-rule 폴더에서): docker compose up -d --build / 로그 보기: docker compose logs -f / 멈춤: docker compose down
+# 주의: 로컬에서 .venv\Scripts\python main.py run 을 같이 돌리면 같은 state·output 파일을 두 곳에서 쓰므로 하나만 실행할 것
+services:
+  bola-rule:
+    build: .
+    image: bola-rule:latest
+    container_name: bola-rule
+    restart: unless-stopped
+    volumes:
+      # 접속 정보·CA는 읽기 전용으로 붙임 (main.py가 로컬과 똑같이 .env를 읽음, 비밀번호 따옴표도 그대로 처리)
+      - ./.env:/app/bola-rule/.env:ro
+      - ./root-ca.pem:/app/bola-rule/root-ca.pem:ro
+      # 코드를 다시 빌드하지 않고 룰 설정만 바꿀 수 있게 붙임 (바꾼 뒤 docker compose restart)
+      - ./config.yaml:/app/bola-rule/config.yaml:ro
+      # 결과는 로컬 폴더에 그대로 쌓임 (judge-server가 여기를 읽음)
+      - ./state:/app/bola-rule/state
+      - ./output:/app/bola-rule/output

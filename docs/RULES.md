@@ -1,7 +1,7 @@
 # BOLA 탐지 룰 설명서
 
-`PYTHON-ENGIN`이 쓰는 Python 룰(BOLA-R1 ~ R6)을 설명합니다.
-설정 값은 모두 `config.yaml`에 있고, 코드는 `bola_engine/rules.py`에 있습니다.
+bola-rule 엔진이 쓰는 Python 룰(BOLA-R1 ~ R6)을 설명합니다.
+설정 값은 모두 `config.yaml`에 있고, 코드는 `bola_engine/rules.py`에 있습니다. 내부 동작 순서는 [RULE_FLOW.md](RULE_FLOW.md)를 참고하세요.
 
 ---
 
@@ -256,6 +256,7 @@ resp_ids: {"id": ["39"], "user_id": ["20"]}     ← owner_fields: "GET /orders/{
 
 ```json
 {
+  "event_time": "2026-10-29T00:11:35+09:00",
   "detected_at": "2026-10-29T00:11:40+09:00",
   "message": "이 로그는 BOLA-R2(장부 주인 불일치) 룰을 위반했습니다.",
   "rule": {"id": "BOLA-R2", "name": "장부 주인 불일치", "severity": "high", "description": "..."},
@@ -318,10 +319,12 @@ list_sources: ...         # 장부: 목록 API → 주인 확인
 | 가짜 로그 22,203줄 | 638 / 638 탐지, 오탐 0 |
 | 가짜 로그 + R2 시나리오 400줄 | 738 / 738 탐지 (R1 637, R2 81, R3 20), 정상 300건 중 오탐 0 |
 | R4 공격자 단위 | 공격자 6명 모두 경보 (빠른 2명은 급속 창, 느린 4명은 저속 창), 공격자가 아닌 사용자는 0명 |
-
 | R5·R6 추가 후, 가짜 로그 + R2 시나리오 | 738 / 738 탐지 (R1 637, R2 80, R3 20, R5 1), 오탐 0. R6 경보 6건은 모두 공격자(21, 43) |
+| R5·R6 추가 후, Indexer 모양 가짜 로그 1,006건 (`tools/make_indexer_fake.py`) | BOLA 36 / 36 탐지, 오탐 0. R4·R6 경보는 모두 정답지의 공격자 |
 | R5·R6 추가 후, 실제 Wazuh Indexer 로그 158건 (`bola-api-*`) | 위반 30건 (R1 27, R5 1, R4 1, R6 1). R6: 요청자 1이 9초 동안 `/members/{id}` ID 2~6 연속 조회 |
 
-재현 명령은 `README.md`의 "사용법"을 참고하세요.
+재현 명령은 [README.md](../README.md)의 "사용법"을 참고하세요.
 
 > 대부분의 결과는 BOLA-APP의 로그와, 그 로그를 본떠 만든 가짜 로그로 확인한 것입니다. 실제 Wazuh Indexer 로그(`bola-api-*`)는 158건으로 리플레이만 했고, 정답지가 없어 정탐·오탐 채점은 하지 않았습니다.
+>
+> 가짜 로그와 정답지 파일은 지금 `data/`에서 지웠습니다. Indexer 모양 가짜 로그는 `python tools/make_indexer_fake.py`로 다시 만들 수 있습니다. BOLA-APP 가짜 로그와 R2 시나리오(`access_fake_r2.json`)는 BOLA-APP 원본 데이터가 레포 밖에 있어 지금은 다시 만들 수 없습니다.

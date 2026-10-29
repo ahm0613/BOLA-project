@@ -87,6 +87,7 @@ def parse_line(line):
 
 
 def path_of(e):
+  """URI에서 쿼리 문자열(?...)을 뗀 경로"""
   return e["uri"].split("?")[0]
 
 
@@ -123,6 +124,7 @@ def pick(e, field):
 
 
 def day_of(e):
+  """이벤트가 일어난 날짜 (YYYY-MM-DD). 장부의 방문 날짜로 씀"""
   return str(e.get("time") or (e["_meta"].get("timestamp") or ""))[:10]
 
 

@@ -21,10 +21,12 @@ class _TLSHostnameAdapter(HTTPAdapter):
   """IP로 접속하되 인증서는 지정한 이름으로 검사 (인증서 SAN에 IP가 없을 때)"""
 
   def __init__(self, hostname, **kwargs):
+    """hostname: 인증서 검사에 쓸 이름 (예: wazuh.indexer)"""
     self.hostname = hostname
     super().__init__(**kwargs)
 
   def init_poolmanager(self, *args, **kwargs):
+    """접속은 IP로 하되, 인증서 이름 검사와 SNI는 hostname으로 하도록 설정"""
     kwargs["assert_hostname"] = self.hostname
     kwargs["server_hostname"] = self.hostname
     super().init_poolmanager(*args, **kwargs)
@@ -34,6 +36,7 @@ class IndexerSource:
   """Wazuh Indexer(OpenSearch) 검색 API로 API 로그를 시간순으로 가져옴"""
 
   def __init__(self, url, user, password, index, verify=False, batch_size=500, tls_hostname=None):
+    """Indexer 주소·계정·인덱스로 HTTP 세션을 만듦 (CA 검증, 인증서 이름 지정 포함)"""
     self.url = url.rstrip("/")
     self.index = index
     self.batch_size = batch_size
@@ -46,6 +49,7 @@ class IndexerSource:
       urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # 자체 서명 인증서(개발용)
 
   def _search(self, body):
+    """_search API에 검색 요청을 보내고 결과 문서(hits) 목록을 돌려줌"""
     r = self.session.post(
       f"{self.url}/{self.index}/_search",
       params={"ignore_unavailable": "true", "allow_no_indices": "true"},
@@ -55,13 +59,15 @@ class IndexerSource:
     return r.json()["hits"]["hits"]
 
   def count(self):
+    """인덱스의 전체 문서 수 (check 명령용)"""
     r = self.session.get(f"{self.url}/{self.index}/_count",
                          params={"ignore_unavailable": "true", "allow_no_indices": "true"}, timeout=10)
     r.raise_for_status()
     return r.json()["count"]
 
-  def iter_range(self, gte_ms, lte_ms=None):
+  def iter_range(self, gte_ms, lte_ms=None, with_source=False):
     """timestamp가 [gte_ms, lte_ms] 안인 문서를 (_id, 시각ms, 이벤트) 로 시간순 반환
+    with_source=True면 (_id, 시각ms, 이벤트, 원본 _source) 로 반환 (전체 API 로그 보관용)
     search_after로 페이지를 넘기므로 1만 건이 넘어도 끝까지 읽음"""
     rng = {"gte": gte_ms, "format": "epoch_millis"}
     if lte_ms is not None:
@@ -78,7 +84,8 @@ class IndexerSource:
       hits = self._search(body)
       for h in hits:
         meta = {"index": h["_index"], "doc_id": h["_id"]}
-        yield h["_id"], h["sort"][0], from_wazuh(h["_source"], meta)
+        e = from_wazuh(h["_source"], meta)
+        yield (h["_id"], h["sort"][0], e, h["_source"]) if with_source else (h["_id"], h["sort"][0], e)
       if len(hits) < self.batch_size:
         return
       body["search_after"] = hits[-1]["sort"]
@@ -89,12 +96,14 @@ class Checkpoint:
   Filebeat가 조금 늦게 넣는 문서를 놓치지 않도록 overlap만큼 겹쳐 읽고, 이미 본 _id는 건너뜀"""
 
   def __init__(self, path, overlap_ms):
+    """path: 저장 파일, overlap_ms: 늦게 들어온 로그를 놓치지 않으려고 겹쳐 읽는 길이"""
     self.path = path
     self.overlap_ms = overlap_ms
     self.last_ms = None
     self.seen = {}                                        # _id → 시각ms (overlap 구간만 보관)
 
   def load(self):
+    """저장 파일이 있으면 마지막 시각과 이미 본 문서 목록을 불러옴"""
     if os.path.exists(self.path):
       with open(self.path, encoding="utf-8") as f:
         data = json.load(f)
@@ -103,20 +112,25 @@ class Checkpoint:
     return self
 
   def exists(self):
+    """이전에 읽은 기록이 있는지"""
     return self.last_ms is not None
 
   def since_ms(self):
+    """다음 조회 시작 시각 (마지막 시각에서 overlap만큼 앞)"""
     return self.last_ms - self.overlap_ms
 
   def is_new(self, doc_id):
+    """아직 처리하지 않은 문서인지 (겹쳐 읽은 구간의 중복 제거)"""
     return doc_id not in self.seen
 
   def mark(self, doc_id, ts_ms):
+    """문서를 처리했다고 기록하고 마지막 시각을 앞으로 옮김"""
     self.seen[doc_id] = ts_ms
     if self.last_ms is None or ts_ms > self.last_ms:
       self.last_ms = ts_ms
 
   def save(self):
+    """overlap 구간 밖의 오래된 기록은 버리고 파일에 저장 (임시 파일에 쓴 뒤 바꿔치기)"""
     if self.last_ms is not None:
       cutoff = self.last_ms - self.overlap_ms
       self.seen = {k: v for k, v in self.seen.items() if v >= cutoff}
@@ -151,4 +165,5 @@ def read_files(paths):
 
 
 def now_ms():
+  """현재 시각 (epoch ms)"""
   return int(time.time() * 1000)
