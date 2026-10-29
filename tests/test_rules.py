@@ -1,4 +1,8 @@
-"""룰 단위 테스트: python -m unittest discover tests"""
+"""룰 단위 테스트: python -m unittest discover tests
+
+역할: Indexer 없이 짧은 가짜 이벤트로 룰 R1~R6, 장부, 로그 형식 변환이 의도대로 동작하는지 확인한다.
+룰이나 설정 동작을 바꾸면 먼저 이 테스트를 돌린다.
+"""
 import json
 import os
 import sys
@@ -6,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from bola_engine.event import from_kong, from_wazuh, resource_of  # noqa: E402
+from bola_engine.event import from_kong, from_wazuh, parse_line, resource_of  # noqa: E402
 from bola_engine.ledger import Ledger  # noqa: E402
 from bola_engine.rules import Detector  # noqa: E402
 
@@ -15,6 +19,7 @@ CFG = {
   "rules": {},
   "owner_fields": {"GET /orders/{id}": "user_id", "GET /members/{id}/addresses": "[].user_id"},
   "list_sources": {"GET /orders": {"resource": "/orders/{id}", "id_field": "[].id"}},
+  "path_owners": ["/members/{id}", "/profiles/{id}"],
 }
 
 
@@ -70,8 +75,10 @@ class RuleTest(unittest.TestCase):
     self.assertEqual(self.det.counts["unknown_owner"], 1)
 
   def test_r1_empty_response_falls_back_to_r2(self):
-    self.det.process(ev("4", "GET", "/members/4/addresses", resp_ids={"[].id": ["8"], "[].user_id": ["4"]}))
-    v = self.det.process(ev("1", "GET", "/members/4/addresses", resp_ids=None))
+    # path_owners가 없을 때 (있으면 /members는 R5가 먼저 판정)
+    det = Detector(dict(CFG, path_owners=[]), Ledger())
+    det.process(ev("4", "GET", "/members/4/addresses", resp_ids={"[].id": ["8"], "[].user_id": ["4"]}))
+    v = det.process(ev("1", "GET", "/members/4/addresses", resp_ids=None))
     self.assertEqual(v[0]["rule"]["id"], "BOLA-R2")
 
   def test_r3_unknown_object_write(self):
@@ -107,6 +114,57 @@ class RuleTest(unittest.TestCase):
     e2["started_at"] = 120_000                                    # 2분 뒤 → 첫 위반은 창 밖
     self.assertFalse([v for v in det.process(e1) + det.process(e2) if v["rule"]["id"] == "BOLA-R4"])
 
+  def test_r5_path_owner(self):
+    # 주소가 없는 회원(빈 목록 → resp_ids 없음), 장부도 비어 있음 → R1·R2 불가, 경로의 사용자 번호로 판정
+    v = self.det.process(ev("1", "GET", "/members/2/addresses", resp_ids=None))
+    self.assertEqual(v[0]["rule"]["id"], "BOLA-R5")
+    self.assertEqual(v[0]["evidence"]["owners"], ["2"])
+    self.assertEqual(v[0]["evidence"]["owner_source"], "path:/members/{id}")
+    # HEAD도 경로로 판정
+    self.assertEqual(self.det.process(ev("1", "HEAD", "/profiles/3"))[0]["rule"]["id"], "BOLA-R5")
+    # 본인 경로는 정상 (응답 없는 PATCH가 R3로 오탐되지도 않음)
+    self.assertEqual(self.det.process(ev("1", "PATCH", "/members/1")), [])
+
+  def test_r5_not_for_other_paths(self):
+    # /orders/{id}의 ID는 주문 번호라 R5 대상 아님 → 기존대로 R3
+    self.assertEqual(self.det.process(ev("5", "POST", "/orders/99/cancel"))[0]["rule"]["id"], "BOLA-R3")
+
+  def test_r5_response_owner_first(self):
+    # 응답에 주인이 있으면 R1이 우선 (한 요청에 한 룰)
+    v = self.det.process(ev("1", "GET", "/members/4/addresses", resp_ids={"[].user_id": ["4"]}))
+    self.assertEqual([x["rule"]["id"] for x in v], ["BOLA-R1"])
+
+  def _seq(self, det, user, uris_statuses, step_ms=1000):
+    out = []
+    for i, (uri, status) in enumerate(uris_statuses):
+      e = ev(user, "GET", uri, status=status)
+      e["request_id"] = f"r{i}"
+      e["started_at"] = 1_000_000 + i * step_ms
+      out += [v for v in det.process(e) if v["rule"]["id"] == "BOLA-R6"]
+    return out
+
+  def test_r6_sequential_scan(self):
+    # 남의 주문을 찔러 봄: 404·403·200이 섞여 있어도 연속 ID 5개면 경보 1번 (cooldown)
+    det = Detector(CFG, Ledger())
+    seq = [(f"/orders/{n}", s) for n, s in zip(range(180, 187), [404, 403, 404, 403, 403, 404, 403])]
+    r6 = self._seq(det, "1", seq)
+    self.assertEqual(len(r6), 1)
+    self.assertEqual(r6[0]["evidence"]["ids"], ["180", "181", "182", "183", "184"])
+    self.assertEqual(r6[0]["rule"]["severity"], "medium")
+
+  def test_r6_ignores_own_and_gaps(self):
+    det = Detector(CFG, Ledger())
+    # 본인 주문 5개를 연달아 보는 것은 정상 (목록으로 본인 것 확인됨)
+    det.process(ev("2", "GET", "/orders", resp_ids={"[].id": ["10", "11", "12", "13", "14"]}))
+    self.assertEqual(self._seq(det, "2", [(f"/orders/{n}", 200) for n in range(10, 15)]), [])
+    # 띄엄띄엄(간격 > max_gap)이면 연속이 아님
+    self.assertEqual(self._seq(det, "1", [(f"/orders/{n}", 404) for n in (100, 110, 120, 130, 140)]), [])
+
+  def test_r6_window(self):
+    # 창(60초)보다 느리게 훑으면 경보 없음
+    det = Detector(CFG, Ledger())
+    self.assertEqual(self._seq(det, "1", [(f"/orders/{n}", 404) for n in range(50, 56)], step_ms=20_000), [])
+
   def test_inferred_owner(self):
     led = Ledger(min_share=0.7)
     for d in ["01", "02", "03"]:
@@ -136,6 +194,15 @@ class RuleTest(unittest.TestCase):
     self.assertEqual(e["status"], 200)
     self.assertEqual(e["resp_ids"], {"[].id": ["1"]})
     self.assertEqual(e["_meta"]["agent"], "kong-wazuh-agent")
+
+  def test_parse_bola_api_doc(self):
+    # bola-api-* 문서(_source): agent·location이 source 아래에 있음
+    kong = {"method": "GET", "uri": "/orders/2", "status": 200, "user_id": "1", "role": "user"}
+    doc = {"timestamp": "2026-10-28T00:26:11.739+00:00", "full_log": json.dumps(kong),
+           "source": {"location": "/logs/kong/access.json", "agent": {"name": "pc1-bola"}}}
+    e = parse_line(json.dumps(doc))
+    self.assertEqual((e["uri"], e["_meta"]["agent"], e["_meta"]["location"]),
+                     ("/orders/2", "pc1-bola", "/logs/kong/access.json"))
 
 
 if __name__ == "__main__":

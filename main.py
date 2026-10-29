@@ -1,5 +1,7 @@
 """BOLA 탐지 엔진 실행
 
+역할: 엔진의 시작점(명령줄). 설정을 읽고 bola_engine의 입력·판정·출력을 모드에 맞게 이어 붙인다.
+
   python main.py check                       Indexer 연결·문서 수 확인
   python main.py learn                       과거 N일 로그로 장부를 새로 만듦
   python main.py run [--relearn]             실시간 탐지 (장부가 없으면 먼저 학습)

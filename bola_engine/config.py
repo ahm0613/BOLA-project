@@ -1,4 +1,9 @@
-"""config.yaml(룰·동작 설정) + .env(Indexer 접속 정보) 읽기"""
+"""config.yaml(룰·동작 설정) + .env(Indexer 접속 정보) 읽기
+
+역할: 엔진 전체가 쓰는 설정 dict를 하나로 만든다. main.py가 시작할 때 load_config()를 한 번 부른다.
+  - 상대 경로(paths.*, CA 인증서)는 bola-rule 폴더 기준으로 바꿈
+  - 비밀번호 등 접속 정보는 .env에서만 읽음 (config.yaml에는 두지 않음)
+"""
 import os
 
 import yaml

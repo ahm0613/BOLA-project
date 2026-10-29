@@ -1,4 +1,10 @@
-"""로그 입력: Wazuh Indexer(wazuh-api-*) 조회, 파일 리플레이"""
+"""로그 입력: Wazuh Indexer(bola-api-*) 조회, 파일 리플레이
+
+역할: 엔진에 로그를 넣어 주는 입구. 판정은 하지 않고 이벤트를 시간순으로 넘겨주기만 한다.
+  IndexerSource  learn·run 모드: Indexer 검색 API로 timestamp 순으로 읽음 (CA 검증, 인증서 이름 지정)
+  Checkpoint     run 모드: 어디까지 읽었는지 state/checkpoint.json에 저장 (재시작해도 중복·누락 없음)
+  read_files     replay 모드: Kong 로그·archives·bola-api-* 문서 파일을 읽음
+"""
 import json
 import os
 import time

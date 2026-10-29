@@ -1,4 +1,10 @@
-"""Kong 로그 한 건(이벤트)을 엔진이 쓰는 모양으로 정리하고, URL에서 API·객체 정보를 뽑는 함수 모음"""
+"""Kong 로그 한 건(이벤트)을 엔진이 쓰는 모양으로 정리하고, URL에서 API·객체 정보를 뽑는 함수 모음
+
+역할: 로그 형식 차이를 여기서 흡수한다. 다른 파일은 형식을 몰라도 같은 이벤트 dict만 다루면 된다.
+  from_wazuh / from_kong / parse_line  Indexer 문서·archives·Kong 원본 → 이벤트 (full_log 우선)
+  api_key / resource_of / pick         룰이 쓰는 도구: "GET /orders/{id}", 객체(resource, key), resp_ids 값
+  summary                              위반 로그에 넣을 원본 요약
+"""
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -75,7 +81,7 @@ def parse_line(line):
     obj = json.loads(line)
   except json.JSONDecodeError:
     return None
-  if "full_log" in obj and "location" in obj:
+  if "full_log" in obj and ("location" in obj or "source" in obj):   # archives 또는 bola-api-* 문서
     return from_wazuh(obj)
   return from_kong(obj)
 

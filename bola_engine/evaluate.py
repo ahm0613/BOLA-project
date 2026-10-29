@@ -1,5 +1,11 @@
 """리플레이 결과를 정답지(attacks_truth.csv)와 비교
-정답지의 ATTEMPT(403/404)는 Wazuh 룰 담당이므로 제외하고 BOLA(200 성공)만 평가"""
+정답지의 ATTEMPT(403/404)는 Wazuh 룰 담당이므로 제외하고 BOLA(200 성공)만 평가
+
+역할: replay 모드 전용 채점기. 탐지에는 관여하지 않고, 결과가 맞았는지만 본다.
+  summarize              서비스별 요청·위반 수 표
+  evaluate               정답지 CSV로 정탐·미탐·오탐, 시나리오별, R4 공격자 단위 채점
+  evaluate_service_logs  API 서버 로그의 owner_id로 채점 (BOLA-APP 로그가 있을 때)
+"""
 import csv
 import json
 import os
@@ -10,7 +16,7 @@ from .rules import INCIDENT_RULES
 
 
 def _split(violations):
-  """요청 단위 위반(R1~R3)과 사용자 단위 사건 경보(R4) 분리"""
+  """요청 단위 위반(R1~R3·R5)과 사용자 단위 사건 경보(R4·R6) 분리"""
   per_req = [v for v in violations if v["rule"]["id"] not in INCIDENT_RULES]
   incidents = [v for v in violations if v["rule"]["id"] in INCIDENT_RULES]
   return per_req, incidents
@@ -55,6 +61,7 @@ def evaluate(violations, truth_path):
       print(f"  {sc:18s} {len(hit):4d} / {len(ids):4d}  {rules}")
   # R4: 공격자(사용자) 단위 채점
   attackers = Counter(t["attacker_user_id"] for t in truth.values())
+  incidents = [v for v in incidents if v["rule"]["id"] == "BOLA-R4"]   # 공격자 단위 채점은 R4만
   flagged = Counter(v["original"]["user_id"] for v in incidents)
   print("\n=== R4 사건 경보 (공격자 단위) ===")
   print(f"정답 공격자 {len(attackers)}명 / R4 경보 {len(incidents)}건, 경보받은 사용자 {len(flagged)}명")

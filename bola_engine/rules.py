@@ -1,14 +1,19 @@
 """Python BOLA 룰 (Wazuh 룰로는 못 잡는, 기억이 필요한 판정)
 
+역할: 엔진의 핵심. Detector.process(이벤트)가 판정 → 장부 갱신 → 위반 목록 반환을 한 번에 한다.
+learn·run·replay 모드 모두 같은 Detector를 쓰므로 판정 결과가 모드와 관계없이 같다. 동작 설명은 RULE_FLOW.md.
+
 BOLA-R1 응답 주인 불일치: 성공 응답에 담긴 객체 주인(owner_fields)이 요청자와 다름
 BOLA-R2 장부 주인 불일치: 응답에 주인 정보가 없으면 장부의 주인과 요청자를 비교
 BOLA-R3 목록 밖 객체 변경: 주인을 모르는 객체를, 요청자가 다뤄 본 적도 없는데 변경함 (의심)
-BOLA-R4 다수 소유자 접근: 한 사용자가 짧은 시간에 여러 피해자의 객체에 접근 (R1~R3 묶음, 사건 경보)
+BOLA-R4 다수 소유자 접근: 한 사용자가 짧은 시간에 여러 피해자의 객체에 접근 (R1~R3·R5 묶음, 사건 경보)
+BOLA-R5 경로 주인 불일치: URL의 ID가 곧 사용자 번호인 API(path_owners)에서 그 번호가 요청자와 다름
+BOLA-R6 순차 ID 탐색: 한 사용자가 짧은 시간에 남의(또는 주인 모를) 객체 ID를 연속으로 훑음 (403/404 포함, 사건 경보)
 """
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
-from .event import api_key, day_of, pick, resource_of, summary
+from .event import NUM, api_key, day_of, path_of, pick, resource_of, summary
 
 KST = timezone(timedelta(hours=9))
 
@@ -30,12 +35,22 @@ RULES = {
   },
   "BOLA-R4": {
     "name": "다수 소유자 접근",
-    "description": "한 사용자가 짧은 시간 안에 여러 피해자의 객체에 접근함 (R1~R3 위반 묶음)",
+    "description": "한 사용자가 짧은 시간 안에 여러 피해자의 객체에 접근함 (R1~R3·R5 위반 묶음)",
     "severity": "critical",
+  },
+  "BOLA-R5": {
+    "name": "경로 주인 불일치",
+    "description": "URL의 ID가 사용자 번호인 API에서, 그 번호가 요청자와 다름 (응답·장부 없이 판정)",
+    "severity": "high",
+  },
+  "BOLA-R6": {
+    "name": "순차 ID 탐색",
+    "description": "한 사용자가 짧은 시간 안에 자기 것이 아닌 객체 ID를 연속으로 요청함 (성공·403·404 포함)",
+    "severity": "medium",
   },
 }
 
-INCIDENT_RULES = {"BOLA-R4"}       # 요청 한 건이 아니라 사용자 단위로 묶은 경보
+INCIDENT_RULES = {"BOLA-R4", "BOLA-R6"}   # 요청 한 건이 아니라 사용자 단위로 묶은 경보
 
 
 class Detector:
@@ -59,6 +74,15 @@ class Detector:
     self.r4_keep_ms = max(w["ms"] for w in self.r4_windows)
     self.recent = {}                                      # 요청자 → deque[(시각ms, 피해대상, request_id, rule)]
     self.r4_last = {}                                     # (요청자, 창 이름) → 마지막 경보 시각ms (cooldown)
+    # R5: "/members/{id}" 처럼 경로 앞부분의 마지막 {id}가 사용자 번호인 API
+    self.path_owners = [[s for s in t.split("/") if s] for t in (config.get("path_owners") or [])]
+    r6 = self.rule_cfg.get("BOLA-R6") or {}
+    self.r6_ms = int(r6.get("window_sec", 60)) * 1000
+    self.r6_min_run = int(r6.get("min_run", 5))
+    self.r6_max_gap = int(r6.get("max_gap", 1))
+    self.r6_statuses = set(r6.get("statuses") or [403, 404])   # 2xx 외에 R6에 넣을 상태 코드
+    self.r6_recent = {}                                   # (요청자, resource, 상위 ID) → deque[(시각ms, ID, status, request_id)]
+    self.r6_last = {}                                     # 같은 키 → 마지막 경보 시각ms (cooldown)
 
   def _enabled(self, rule_id):
     return (self.rule_cfg.get(rule_id) or {}).get("enabled", True)
@@ -73,11 +97,23 @@ class Detector:
       and 200 <= e["status"] < 300
     )
 
+  def _path_owner(self, e):
+    """path_owners에 맞는 경로면 (템플릿, 경로 속 사용자 번호), 아니면 None
+    /members/2/addresses 와 "/members/{id}" → ("/members/{id}", "2")"""
+    segs = [s for s in path_of(e).split("/") if s]
+    for t in self.path_owners:
+      if len(segs) < len(t):
+        continue
+      if all((NUM.match(s) if p == "{id}" else s == p) for p, s in zip(t, segs)):
+        last = max(i for i, p in enumerate(t) if p == "{id}")
+        return "/" + "/".join(t), segs[last]
+    return None
+
   def process(self, e):
     """이벤트 하나를 판정하고 장부를 갱신. 위반 목록을 반환 (장부 학습만 할 때는 결과를 버리면 됨)"""
     self.counts["events"] += 1
     if not self._judgeable(e):
-      return []
+      return self._r6(e, own=False)                       # 403/404도 순차 탐색에는 포함
     self.counts["judged"] += 1
 
     me = e["user_id"]
@@ -85,10 +121,13 @@ class Detector:
     res = resource_of(e)
     owner_field = self.owner_fields.get(api)
     resp_owners = sorted(set(pick(e, owner_field)))
+    path_owner = self._path_owner(e)
     violations = []
+    own = False                                           # 요청자 본인 객체인지 (R6에서 제외용)
 
     if resp_owners:
       others = [o for o in resp_owners if o != me]
+      own = not others
       if others and self._enabled("BOLA-R1"):
         violations.append(self._violation("BOLA-R1", e, (
           f"요청자 {me}이(가) 주인 {', '.join(others)}의 객체({e['method']} {e['uri']})를 "
@@ -101,9 +140,27 @@ class Detector:
           "owners": others,
           "owner_source": f"response:{owner_field}",
         }))
+    elif path_owner:
+      # R5: 응답에 주인이 없어도, 경로의 사용자 번호로 바로 판정 (장부 불필요, HEAD 등도 포함)
+      template, owner = path_owner
+      own = owner == me
+      if not own and self._enabled("BOLA-R5"):
+        violations.append(self._violation("BOLA-R5", e, (
+          f"요청자 {me}이(가) 경로상 사용자 {owner}의 객체({e['method']} {e['uri']})에 접근해 "
+          f"{e['status']} 응답을 받음 (경로 {template})"
+        ), {
+          "api": api,
+          "resource": res[0] if res else None,
+          "object_id": res[1] if res else None,
+          "requester": me,
+          "owners": [owner],
+          "owner_source": f"path:{template}",
+        }))
     elif res:
       owner, source = self.ledger.owner(*res)
+      own = owner == me
       if owner is None:
+        own = self.ledger.visited_by(res[0], res[1], me)
         self.counts["unknown_owner"] += 1
         # R3: 주인을 모르는 객체를, 다뤄 본 적도 없이 변경 (조회는 정상 사용에서도 흔하므로 변경만)
         if (e["method"] in self.write_methods and self._enabled("BOLA-R3")
@@ -134,7 +191,62 @@ class Detector:
 
     self._learn(e, api, res, resp_owners, violated=bool(violations))
     violations += self._r4(e, violations)
+    violations += self._r6(e, own=own)
     return violations
+
+  def _r6(self, e, own):
+    """같은 객체 종류에서 자기 것이 아닌 ID를 창(window_sec) 안에 연속으로 min_run개 이상 요청하면 경보
+    대상: 로그인한 일반 사용자의 2xx·403·404 요청 (Kong 차단 제외). 본인 객체는 세지 않음"""
+    if own or not self._enabled("BOLA-R6"):
+      return []
+    status = e.get("status")
+    if (e.get("user_id") is None or e.get("role") in self.exclude_roles or e.get("blocked")
+        or status is None or not (200 <= status < 300 or status in self.r6_statuses)):
+      return []
+    res = resource_of(e)
+    if not res:
+      return []
+    me = e["user_id"]
+    *parent, oid = res[1].split("/")                      # /members/1/addresses/5 → 상위 "1", ID 5
+    key = (me, res[0], "/".join(parent))
+    now = _ts_ms(e)
+    q = self.r6_recent.setdefault(key, deque())
+    q.append((now, int(oid), status, e.get("request_id")))
+    while q and q[0][0] < now - self.r6_ms:
+      q.popleft()
+
+    # 서로 다른 ID를 정렬해 간격이 max_gap 이하로 이어지는 가장 긴 구간을 찾음
+    ids = sorted({x[1] for x in q})
+    best = run = [ids[0]]
+    for a, b in zip(ids, ids[1:]):
+      run = run + [b] if b - a <= self.r6_max_gap else [b]
+      if len(run) > len(best):
+        best = run
+    last = self.r6_last.get(key)
+    if len(best) < self.r6_min_run or (last is not None and now - last < self.r6_ms):
+      return []
+    self.r6_last[key] = now
+    inside = [x for x in q if best[0] <= x[1] <= best[-1]]
+    statuses = {}
+    for x in inside:
+      statuses[str(x[2])] = statuses.get(str(x[2]), 0) + 1
+    return [self._violation("BOLA-R6", e, (
+      f"요청자 {me}이(가) 최근 {_dur(self.r6_ms)} 동안 {res[0]}의 ID {best[0]}~{best[-1]} "
+      f"{len(best)}개를 연속으로 요청함 (기준 {self.r6_min_run}, 상태 {statuses})"
+    ), {
+      "api": api_key(e),
+      "resource": res[0],
+      "object_id": None,
+      "requester": me,
+      "owners": [],
+      "owner_source": "sequence",
+      "ids": [str(i) for i in best],
+      "statuses": statuses,
+      "window_sec": self.r6_ms // 1000,
+      "request_ids": [x[3] for x in inside][:50],
+      "first_time": _iso(min(x[0] for x in inside)),
+      "last_time": _iso(now),
+    })]
 
   def _r4(self, e, violations):
     """R1~R3 위반을 요청자별로 모아, 창(window) 안에 서로 다른 피해 대상이 기준 이상이면 사건 경보

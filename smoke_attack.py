@@ -1,5 +1,8 @@
 """실환경 스모크 테스트: alice로 로그인해 정상 요청과 BOLA 공격을 섞어 보냄 (test.ps1의 Python 버전)
 엔진(python main.py run)을 켜 둔 상태에서 실행 → 30초~1분 안에 BOLA-R1/R2 위반이 찍혀야 함
+
+역할: 엔진 코드는 아니고, 실제 Kong에 요청을 보내 Kong → Wazuh → Indexer → 엔진 전체 경로를 시험하는 도구.
+대상 주소는 .env의 KONG_URL (학원 환경에서는 pc1-bola의 Kong 주소, 아직 미정)
 """
 import os
 

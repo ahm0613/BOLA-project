@@ -1,5 +1,9 @@
 """가짜 로그에 R2(장부 주인 불일치) 시나리오를 섞은 새 로그 + 정답지 만들기
 
+역할: 시험 데이터 생성 도구 (엔진 실행에는 필요 없음). data/access_fake_r2.json, attacks_truth_r2.csv를 만든 스크립트.
+주의: 원본 BOLA-APP/engine/data/access_fake.json이 레포 안에 있어야 실행됨 (지금은 BOLA-APP이 레포 밖이라 재실행 불가,
+      결과 파일은 data/에 남아 있음)
+
 응답에 주인(user_id)이 없는 API를 사용:
   POST  /orders/{id}/cancel          → 응답 {id, order_number, status}        → resp_ids {"id": [...]}
   PATCH /orders/{id}/delivery-memo   → 응답 {id, order_number, delivery_memo} → resp_ids {"id": [...]}
