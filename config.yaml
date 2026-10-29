@@ -1,0 +1,59 @@
+# BOLA 탐지 엔진 설정 (Indexer 접속 정보는 .env)
+
+indexer:
+  index: "bola-api-*"           # Kong API 로그만 모인 인덱스 (학원 Wazuh Indexer, 시간 필드는 timestamp)
+  poll_interval_sec: 10         # 실시간 모드에서 몇 초마다 새 로그를 가져올지
+  overlap_sec: 30               # Filebeat가 늦게 넣는 로그를 놓치지 않도록 겹쳐 읽는 구간
+  batch_size: 500               # 한 번에 가져올 문서 수
+
+learning:
+  days: 7                       # 장부가 없을 때 과거 며칠치 로그로 학습할지
+  min_share: 0.7                # 방문 기록으로 주인을 추정할 때, 한 사용자가 차지해야 할 날짜 비율
+
+paths:
+  ledger: state/ledger.json
+  checkpoint: state/checkpoint.json
+  violations: output/violations.jsonl
+  replay_violations: output/replay_violations.jsonl
+
+exclude_roles: [admin]          # 관리자는 남의 객체 조회가 정상이므로 판정 제외
+
+rules:
+  BOLA-R1: { enabled: true, severity: high }
+  BOLA-R2: { enabled: true, severity: high }
+  # R3: 주인을 모르는 객체를 다뤄 본 적 없이 변경 → 확정이 아닌 '의심'이라 medium
+  BOLA-R3: { enabled: true, severity: medium, methods: [POST, PUT, PATCH, DELETE] }
+  # R4: 창(window_sec) 안에 서로 다른 피해 대상이 min_victims 이상이면 사건 경보 (같은 사용자·같은 창은 창 길이 동안 1번만)
+  BOLA-R4:
+    enabled: true
+    severity: critical
+    windows:
+      - { name: 급속, window_sec: 600, min_victims: 5 }      # 10분 안에 몰아서 수집
+      - { name: 저속, window_sec: 86400, min_victims: 5 }    # 하루에 걸쳐 천천히 수집
+
+# R1: API별로 응답의 어떤 필드가 '객체 주인'인지 (Kong resp_ids의 키 이름)
+# 여기에 없는 API나, 응답에 이 필드가 없을 때는 R2(장부)로 판정
+owner_fields:
+  "GET /members/{id}": "user_id"
+  "PATCH /members/{id}": "user_id"
+  "GET /members/{id}/addresses": "[].user_id"
+  "GET /members/{id}/addresses/{id}": "user_id"
+  "GET /orders/{id}": "user_id"
+  "GET /payments/{id}": "user_id"
+  "GET /profiles/{id}": "user_id"
+
+# 목록 API: 응답에 나온 객체를 장부에 '주인 확인됨'으로 추가
+#   resource : 상세 API의 객체 모양 (resource_of 결과와 같아야 함)
+#   id_field : 목록 응답에서 객체 ID 필드
+#   owner_field (선택): 응답에 주인 필드가 있으면 그 값, 없으면 요청자 본인을 주인으로 봄
+list_sources:
+  "GET /orders":
+    resource: "/orders/{id}"
+    id_field: "[].id"
+  "GET /payments":
+    resource: "/payments/{id}"
+    id_field: "[].id"
+  "GET /members/{id}/addresses":
+    resource: "/members/{id}/addresses/{id}"
+    id_field: "[].id"
+    owner_field: "[].user_id"
