@@ -38,6 +38,9 @@ git에 없는 파일 세 가지를 먼저 준비합니다.
    powershell -ExecutionPolicy Bypass -File judge\scripts\wsl-portproxy.ps1 -Port 5170 -Name "bola realtime"  # 5170: Fluent Bit 로그 수신
    ```
    **재부팅이나 `wsl --shutdown` 뒤에는 WSL IP가 바뀌므로 다시 실행합니다.**
+4. **자동 시작 (선택):** 관리자 PowerShell에서 `judge\scripts\register-startup-task.ps1`을 한 번 실행하면,
+   로그온할 때마다 30초 뒤 작업 스케줄러 "BOLA 자동 시작"이 컨테이너 시작(`docker compose up -d`)과 포트 전달 두 개를 대신 해 줍니다.
+   결과는 `judge/output/startup.log`. 로그인 전(부팅 직후)에는 WSL이 동작하지 않아 실행되지 않습니다.
 
 ## 실행
 

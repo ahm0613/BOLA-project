@@ -179,6 +179,7 @@ python -m unittest discover tests
 | `db.py` | PostgreSQL 저장 스레드 (모아서 쓰기, 재시도, 임시 차단 만료 처리) |
 | `db/init/` | DB 컨테이너 첫 실행 때 테이블(`01-schema.sql`)과 계정(`02-roles.sh`) 생성 |
 | `docker-compose.yml`, `Dockerfile`, `requirements.txt` | PostgreSQL + 판단 서버 컨테이너 |
+| `scripts/bola-startup.ps1`, `scripts/register-startup-task.ps1` | 로그온 시 자동 시작 (컨테이너 `up -d` + 포트 전달 5432·5170). 등록은 관리자로 한 번, 결과는 `output/startup.log` |
 | `scripts/wsl-portproxy.ps1` | LAN → pc1 → WSL 포트 전달 + 방화벽 (관리자, WSL IP가 바뀌면 다시 실행). 5432(DB, `-Remote 192.168.0.26`), 5170(로그 수신, `-Port 5170 -Name "bola realtime"`) |
 | `scoring.py` | 점수·확정 로직 (Redis를 몰라서 테스트하기 쉬움) |
 | `store.py` | `confirmed.json` 읽기·쓰기, 확정 근거 기록 |
