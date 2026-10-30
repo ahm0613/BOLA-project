@@ -8,6 +8,8 @@
   python judge.py --quiet         실시간 모드에서 이벤트마다 나오는 점수 줄을 끔
 
 실시간 모드에서는 이벤트마다 점수 줄을 화면에 찍고 output/score_log.jsonl에도 남긴다.
+DB 기록 (pc3 Streamlit용, db.py): Redis 이벤트 한 건마다 bola_events 한 행(Redis 값 + 판단 + 조치), 사용자 상태는 user_status.
+  접속 정보는 .env의 PG_*. DB가 없거나 꺼져 있어도 판단은 계속하고, --dry-run이면 DB에도 쓰지 않음.
 
 시작할 때 최근 window_sec 이벤트를 다시 읽어 점수를 복원한 뒤, 그 다음 이벤트부터 그룹으로 받는다.
 (복원에서 이미 본 이벤트가 그룹으로 다시 오면 점수에 두 번 넣지 않고 ACK만 한다)
@@ -22,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 import redis
 
+import db
 from scoring import Judge, parse_event
 from store import ConfirmedStore
 
@@ -57,6 +60,38 @@ def load_config():
     return cfg
 
 
+USER_STATUS = {"normal": "normal", "watch": "watch", "warning": "warning", "attack": "confirmed"}
+
+
+def make_db(cfg, dry_run):
+    """config.json의 db와 .env의 PG_*로 DbWriter를 만듦. 쓸 수 없으면 이유를 출력하고 None"""
+    dc = cfg.get("db") or {}
+    if dry_run or not dc.get("enabled", True):
+        return None
+    if db.psycopg is None:
+        print("[DB] psycopg가 없어 DB 기록 안 함 (pip install -r requirements.txt)", flush=True)
+        return None
+    if not os.getenv("PG_JUDGE_PASSWORD"):
+        print("[DB] .env에 PG_JUDGE_PASSWORD가 없어 DB 기록 안 함", flush=True)
+        return None
+    dsn = db.psycopg.conninfo.make_conninfo(
+        host=os.getenv("PG_HOST", "127.0.0.1"), port=os.getenv("PG_PORT", "5432"),
+        dbname=os.getenv("PG_DB", "bola_judge"), user=os.getenv("PG_JUDGE_USER", "judge"),
+        password=os.getenv("PG_JUDGE_PASSWORD"))
+    writer = db.DbWriter(dsn, flush_sec=dc.get("flush_sec", 1), sweep_sec=dc.get("sweep_sec", 10))
+    err = writer.check()
+    where = f"{os.getenv('PG_HOST', '127.0.0.1')}:{os.getenv('PG_PORT', '5432')}/{os.getenv('PG_DB', 'bola_judge')}"
+    print(f"[DB] {where} " + (f"접속 안 됨 ({err.strip()}) → 판단은 계속하고 연결되면 씀" if err else "접속됨"),
+          flush=True)
+    writer.start()
+    return writer
+
+
+def to_dt(ms):
+    """ms → 한국 시간 datetime (DB TIMESTAMPTZ용)"""
+    return datetime.fromtimestamp(ms / 1000, KST)
+
+
 def fmt_ids(ids):
     """["3", "4"] → "{3,4}" (화면 표시용)"""
     return "{" + ",".join(ids) + "}"
@@ -88,6 +123,9 @@ class Server:
             os.makedirs(os.path.dirname(self.score_log), exist_ok=True)
         self.breached_path = None if dry_run else cfg["paths"].get("breached")
         self.saved_hits = 0                             # breached_apis.json을 마지막으로 저장할 때의 hits 수
+        self.db = make_db(cfg, dry_run)
+        self.rate_sec = (cfg.get("db") or {}).get("rate_block_sec", 600)   # realtime.py의 RATE 임시 차단 길이
+        self.user_state = {}                              # user_id → (사용자 상태, 그 상태로 바뀐 시각)
 
     def handle(self, stream_id, fields):
         """이벤트 하나 처리. 이미 채점한 ID면 건너뜀 (True: 새로 채점함)"""
@@ -103,9 +141,14 @@ class Server:
             self.write_trace(stream_id)
         if self.judge.counts["hits"] != self.saved_hits:    # 새로 털린 (API, 피해자)가 생기면 파일 갱신
             self.save_breached()
+        saved = False
         if decisions and self.store.apply(decisions):
             if not self.dry_run:
-                self.store.save()
+                try:
+                    self.store.save()
+                    saved = True
+                except OSError as err:
+                    print(f"[오류] confirmed.json 저장 실패: {err}", flush=True)
             for d in decisions:
                 if d["type"] == "user":
                     print(f"[확정] 사용자 {d['user_id']} 점수 {d['score']} {d['breakdown']} "
@@ -114,7 +157,73 @@ class Server:
                         print(f"        털린 API: {api} {fmt_ids(victims)}", flush=True)
                 elif d["user_id"] not in self.store.users:  # 확정 사용자의 요청 추가는 건수로만 (상태 줄)
                     print(f"[요청] 사용자 {d['user_id']} {d['reason']}", flush=True)
+        if self.db:
+            self.record_db(stream_id, decisions, saved)
         return True
+
+    def record_db(self, stream_id, decisions, saved):
+        """방금 채점한 Redis 이벤트 한 건을 bola_events 한 행으로 (Redis 값 + 그 시점의 판단 + 조치), 사용자 상태도 갱신
+        실제 쓰기는 db.py 저장 스레드. 조치는 두 가지만 기록 (판단 서버는 차단하지 않음):
+          AC-<스트림ID>-R  RATE 이벤트 = realtime.py의 임시 차단 (만료 시각 = 이벤트 + rate_block_sec)
+          AC-<스트림ID>-L  공격 확정 → confirmed.json 등록 (저장 성공 applied / 실패 failed)"""
+        t = self.judge.last
+        if not t or not t.get("result"):
+            return
+        u, now, ts = t["user_id"], datetime.now(KST), to_dt(t["ts"])
+        result = t["result"]
+
+        # 판단 결과와 그 근거
+        if result == "skip":
+            decision, reason = "ignored", "URL 번호가 요청자 본인 → 장부 오탐으로 보고 점수에서 제외"
+            prev = self.user_state.get(u)
+            status = prev[0] if prev else ("confirmed" if u in self.store.users else
+                                           USER_STATUS[self.judge.level_name(self.judge.level.get(u, 0))])
+        elif result == "confirmed_user":
+            decision, reason, status = "attack", "이미 공격 확정된 사용자 (confirmed.json에 있음)", "confirmed"
+        else:
+            decision = t["level"]
+            reason = t["level_up"]["reason"] if t.get("level_up") else \
+                f"{self.judge.window_ms // 3600000}시간 점수 {t['total']}점 → {decision} 단계 유지"
+            status = USER_STATUS[decision]
+        if self.user_state.get(u, (None,))[0] != status:    # 상태 값이 바뀐 시각만 기억 (점수만 바뀌면 그대로)
+            self.user_state[u] = (status, now)
+
+        # 조치 (한 이벤트에 둘 다 있으면 하나로 합침: AC-...-RL)
+        acts = []
+        if t["kind"] == "RATE":
+            acts.append(("R", f"탐지 엔진 RATE 임시 차단: 짧은 시간에 의심 요청이 몰림 ({t['uri']})",
+                         ts, "applied", ts, ts + timedelta(seconds=self.rate_sec)))
+        if any(d["type"] == "user" for d in decisions):
+            d = next(d for d in decisions if d["type"] == "user")
+            acts.append(("L", f"공격 확정 ({d['reason']}) → confirmed.json 등록, 장부 학습에서 제외",
+                         now, "applied" if saved else "failed", now if saved else None, None))
+        action = {}
+        if acts:
+            action = {
+                "action_id": f"AC-{stream_id}-" + "".join(a[0] for a in acts),
+                "action_reason": " / ".join(a[1] for a in acts),
+                "decided_at": min(a[2] for a in acts),
+                "enforcement_status": acts[0][3],
+                "enforced_at": next((a[4] for a in acts if a[4]), None),
+                "expires_at": next((a[5] for a in acts if a[5]), None),
+            }
+
+        self.db.put_event({
+            "stream_id": stream_id, "event_id": t.get("request_id"), "event_at": ts,
+            "detected_at": to_dt(id_key(stream_id)[0]), "user_id": u, "action_type": t["kind"] or "UNKNOWN",
+            "api_path": t.get("event_api"),
+            "detection_reasons": {
+                "detail": t.get("detail"), "uri": t["uri"], "status": t["status"],
+                "classified_as": t.get("item"), "points": t.get("points"), "victim": t.get("victim"),
+                "breakdown": t.get("breakdown"), "victims": t.get("victims"), "api_victims": t.get("api_victims"),
+            },
+            "risk_score": t.get("score"), "assessed_at": now, "decision": decision, "decision_reason": reason,
+            "user_status": status, "user_status_updated_at": self.user_state[u][1], **action,
+        })
+        self.db.put_user({
+            "user_id": u, "user_status": status, "user_status_updated_at": self.user_state[u][1],
+            "risk_score": t.get("score"), "last_event_at": ts, "last_stream_id": stream_id,
+        })
 
     def write_trace(self, stream_id):
         """방금 채점한 이벤트를 콘솔에 한 줄, score_log 파일에 JSON 한 줄로 남김
@@ -189,6 +298,10 @@ class Server:
               f"확정 사용자 {len(self.store.users)} 확정 요청 {len(self.store.requests)} | 점수 상위 {top}", flush=True)
         for api, row in self.judge.breached().items():
             print(f"[털린 API] {api} 피해자 {fmt_ids(row['victims'])} ← 공격자 {fmt_ids(row['attackers'])}", flush=True)
+        if self.db:
+            d = self.db.counts
+            print(f"[DB] 기록 이벤트 {d['events']} 사용자 상태 {d['users']} "
+                  f"(실패 {d['errors']}, 버림 {d['dropped']})", flush=True)
 
     def save_breached(self):
         """털린 API 요약을 breached_apis.json으로 저장 (임시 파일에 쓴 뒤 바꿔치기)
@@ -236,9 +349,12 @@ def main():
             print(f"[Redis] 연결 안 됨, 3초 뒤 다시 시도: {err}", flush=True)
             time.sleep(3)
     print(f"[복원] 최근 이벤트 {n}건 채점", flush=True)
-    srv.status(force=True)
     if args.once:
+        if srv.db:
+            srv.db.close()                              # 남은 DB 기록을 다 쓰고 끝냄
+        srv.status(force=True)
         return
+    srv.status(force=True)
 
     srv.trace = not args.quiet                          # 실시간으로 들어오는 이벤트는 점수 줄을 보여 줌
     print(f"[대기] 새 이벤트를 기다리는 중 (점수 로그: {srv.score_log or '파일 안 씀'})", flush=True)
@@ -250,6 +366,8 @@ def main():
                 print(f"[Redis] 연결 끊김, 3초 뒤 다시 시도: {err}", flush=True)
                 time.sleep(3)
     except KeyboardInterrupt:
+        if srv.db:
+            srv.db.close()
         srv.status(force=True)
         print("종료")
 

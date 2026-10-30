@@ -113,6 +113,25 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(self.j.breached()["GET /members/{id}/addresses"],
                          {"victims": ["3", "4"], "attackers": ["2", "5"]})
 
+    def test_levels(self):
+        """단계가 올라갈 때만 level_up: 40(watch) → 75(warning) → 80(그대로) → 105(attack)"""
+        self.j.process(ev("2", "BOLA", "/members/3", owner="3", sec=0))
+        self.assertEqual((self.j.last["total"], self.j.last["level_up"]["decision"]), (40, "watch"))
+        self.j.process(ev("2", "BOLA", "/orders/5", owner="9", sec=1, api="GET /orders/{id}"))   # +25, 자원 2종 +10
+        self.assertEqual((self.j.last["total"], self.j.last["level_up"]["decision"]), (75, "warning"))
+        self.j.process(ev("2", "ATTEMPT", "/payments/1", status=403, sec=2))
+        self.assertEqual((self.j.last["total"], self.j.last["level"]), (80, "warning"))
+        self.assertNotIn("level_up", self.j.last)                       # 같은 단계 → 사건 없음
+        self.j.process(ev("2", "BOLA", "/orders/6", owner="9", sec=3, api="GET /orders/{id}"))   # +25, 시도→성공 +20
+        self.assertEqual((self.j.last["total"], self.j.last["level_up"]["decision"], self.j.last["result"]),
+                         (125, "attack", "confirmed"))
+
+    def test_level_jump(self):
+        """한 번에 여러 단계를 넘으면 가장 높은 단계 하나만 기록"""
+        j = Judge({**CFG, "points": {**CFG["points"], "BOLA_PATH": 120}})
+        j.process(ev("2", "BOLA", "/members/3", owner="3"))
+        self.assertEqual((j.last["level_up"]["decision"], j.last["result"]), ("attack", "confirmed"))
+
     def test_after_confirmed(self):
         """확정된 사용자의 새 의심 요청은 바로 requests에 추가"""
         j = Judge(CFG, confirmed_users=["2"])

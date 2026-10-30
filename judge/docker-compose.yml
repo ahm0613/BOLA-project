@@ -1,0 +1,52 @@
+# 판단 서버 + PostgreSQL (pc1)
+# 사용법 (judge 폴더에서):
+#   docker compose up -d --build      둘 다 실행
+#   docker compose up -d postgres     DB만 실행 (판단 서버는 로컬에서 python judge.py로 실행할 때)
+#   docker compose logs -f judge      실시간 점수 로그 보기
+#   docker compose down               멈춤 (DB 데이터는 pgdata 볼륨에 남음)
+# 비밀번호·계정은 같은 폴더의 .env에서 읽음 (.env.example 참고)
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: judge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bola_judge
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD:?.env에 PG_SUPERUSER_PASSWORD를 적어 주세요}
+      PG_JUDGE_USER: ${PG_JUDGE_USER:-judge}
+      PG_JUDGE_PASSWORD: ${PG_JUDGE_PASSWORD:?.env에 PG_JUDGE_PASSWORD를 적어 주세요}
+      PG_DASHBOARD_USER: ${PG_DASHBOARD_USER:-dashboard}
+      PG_DASHBOARD_PASSWORD: ${PG_DASHBOARD_PASSWORD:?.env에 PG_DASHBOARD_PASSWORD를 적어 주세요}
+      TZ: Asia/Seoul
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # 처음 뜰 때(빈 볼륨) 한 번만 실행: 테이블 → 계정
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"            # pc3 Streamlit이 접속 (pc1 방화벽에서 5432 허용 필요)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bola_judge"]
+      interval: 5s
+      retries: 10
+
+  judge:
+    build: .
+    image: bola-judge:latest
+    container_name: bola-judge
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PG_HOST: postgres        # 컨테이너끼리는 서비스 이름으로 접속 (.env의 127.0.0.1을 덮어씀)
+      PG_PORT: "5432"
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./output:/app/output
+      # config.json의 confirmed 경로 ../fluent-bit/confirmed.json → /fluent-bit/confirmed.json
+      - ../fluent-bit:/fluent-bit
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+    name: judge_pgdata         # 루트 compose(name: bola)로 띄워도 같은 볼륨(기존 데이터)을 쓰게 이름 고정

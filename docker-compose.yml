@@ -1,0 +1,14 @@
+# pc1 전체: 로그 받기 → BOLA 판정 → 점수 → DB
+#   bola-realtime  (fluent-bit/)  Fluent Bit 로그 수신(5170) + 장부 판정 → Redis bola:events
+#   bola-judge     (judge/)       Redis 이벤트 → 점수 → confirmed.json + PostgreSQL 기록
+#   judge-postgres (judge/)       판단 결과 DB (5432, pc3 Streamlit이 읽음)
+# 사용법 (WSL에서 /mnt/d/python-rule):
+#   docker compose up -d --build     셋 다 실행
+#   docker compose ps                상태
+#   docker compose logs -f judge     실시간 점수 로그
+# 각 폴더의 .env는 그 폴더의 compose가 그대로 읽음 (비밀번호를 여기 복사하지 않음)
+name: bola
+
+include:
+  - fluent-bit/docker-compose.yml
+  - judge/docker-compose.yml

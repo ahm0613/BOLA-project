@@ -14,6 +14,8 @@
   },
   "window_sec": 86400,
   "threshold": 100,
+  "levels": {"watch": 30, "warning": 60},
+  "db": {"enabled": true, "flush_sec": 1, "sweep_sec": 10, "rate_block_sec": 600},
   "points": {
     "BOLA_PATH": 40,
     "BOLA_LEDGER": 25,

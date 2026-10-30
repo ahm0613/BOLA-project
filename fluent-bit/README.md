@@ -198,6 +198,21 @@ Fluent Bit (클라이언트 인증서, bola-log-ca가 서명) ──▶ realtime
 
 ## 7. 실행
 
+### Docker (pc1 WSL, 추천)
+
+```bash
+cd /mnt/d/python-rule          # WSL에서
+docker compose up -d --build   # 루트 compose: realtime + judge + postgres 한꺼번에
+docker compose logs -f realtime
+```
+
+- 이 폴더를 컨테이너 `/app`에 **읽기 전용으로 붙여서** 실행합니다 (`docker-compose.yml`). 장부를 다시 학습하면 60초 안에 반영되고, 코드를 고치면 `docker compose restart realtime`만 하면 됩니다.
+- Docker가 WSL(NAT) 안에 있으므로 pc2 → pc1:5170을 WSL로 넘기는 포트 전달이 필요합니다 (관리자 PowerShell):
+  `powershell -ExecutionPolicy Bypass -File D:\python-rule\judge\scripts\wsl-portproxy.ps1 -Port 5170 -Name "bola realtime"`
+  재부팅하면 WSL IP가 바뀌므로 다시 실행합니다 (5432도 함께).
+
+### 로컬 Python
+
 ```powershell
 pip install redis                      # 필요한 외부 패키지는 redis 하나
 copy fluent-bit\.env.example fluent-bit\.env   # REDIS_PASSWORD 채우기

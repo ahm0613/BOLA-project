@@ -1,0 +1,4 @@
+# 판단 서버 실행에 필요한 패키지 (설치: pip install -r requirements.txt)
+# redis: bola:events 읽기 / psycopg: PostgreSQL 기록 (없으면 DB 기록 없이 동작)
+redis>=5.0
+psycopg[binary]>=3.1

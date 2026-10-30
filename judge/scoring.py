@@ -71,6 +71,11 @@ class Judge:
         self.recent = {}                                # user_id → deque[채점된 이벤트]
         self.last = {}                                  # 마지막으로 처리한 이벤트의 채점 결과 (점수 로그용)
         self.hits = {}                                  # 털린 API: user_id → {"GET /members/{id}/addresses": {피해자}}
+        # 단계: 점수가 낮은 순으로 (이름, 기준). 마지막 attack은 threshold와 같음 (확정)
+        levels = cfg.get("levels") or {"watch": 30, "warning": 60}
+        self.levels = sorted(levels.items(), key=lambda x: x[1]) + [("attack", self.threshold)]
+        self.level = {}                                 # user_id → 지금까지 올라간 가장 높은 단계 순번 (0=normal)
+        self.scores = {}                                # user_id → 마지막으로 계산한 점수 (확정 뒤 이벤트의 risk_score용)
         self.confirmed = set(confirmed_users or [])
         self.counts = {"events": 0, "scored": 0, "self_skip": 0, "hits": 0}
 
@@ -124,7 +129,9 @@ class Judge:
         me = e["user_id"]
         # 이번 이벤트를 어떻게 채점했는지 (실시간 점수 로그용). status: skip / confirmed_user / scored / confirmed
         self.last = {"ts": e["ts"], "user_id": me, "kind": e["kind"], "uri": e["uri"], "status": e["status"],
-                     "item": item, "victim": victim, "points": self.points.get(item, 0) if item else 0}
+                     "event_api": e["api"], "request_id": e["request_id"], "detail": e["detail"],
+                     "item": item, "victim": victim, "points": self.points.get(item, 0) if item else 0,
+                     "score": self.scores.get(me)}       # 점수를 다시 계산하지 않는 이벤트(무시·확정 사용자)는 마지막 점수
         if item is None:
             if e["kind"] in ("BOLA", "ATTEMPT"):
                 self.counts["self_skip"] += 1
@@ -152,8 +159,17 @@ class Judge:
         while q and q[0]["ts"] < e["ts"] - self.window_ms:
             q.popleft()
         total, breakdown, victims, apis = self.score(q)
+        self.scores[me] = self.last["score"] = total
+        rank = sum(1 for _, need in self.levels if total >= need)   # 0=normal, 1=watch, 2=warning, 3=attack
         self.last.update({"total": total, "breakdown": breakdown, "victims": victims, "events": len(q),
+                          "first_ts": q[0]["ts"], "level": self.level_name(max(rank, self.level.get(me, 0))),
                           "result": "scored" if total < self.threshold else "confirmed"})
+        if rank > self.level.get(me, 0):                 # 단계가 올라갔을 때만 탐지 사건 (내려가는 것은 기록 안 함)
+            self.level[me] = rank
+            need = self.levels[rank - 1][1]
+            self.last["level_up"] = {"decision": self.level_name(rank), "need": need,
+                                     "reason": f"{self.window_ms // 3600000}시간 점수 {total}점 ≥ "
+                                               f"{self.level_name(rank)} 기준 {need}점"}
         if total < self.threshold:
             return out
 
@@ -174,6 +190,10 @@ class Judge:
         })
         self.recent.pop(me, None)
         return out
+
+    def level_name(self, rank):
+        """단계 순번 → 이름. 0=normal, 1부터 levels 순서 (watch, warning, attack)"""
+        return "normal" if rank <= 0 else self.levels[rank - 1][0]
 
     def user_hits(self, user):
         """한 사용자가 턴 API와 피해자. {"GET /members/{id}": ["3", "24"], ...}"""
