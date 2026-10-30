@@ -32,6 +32,10 @@ services:
       PORT: "8080"
       SSL_PORT: "8443"
       SERVER_NAME: "${WAF_SERVER_NAME:-localhost}"
+      WAF_HTTPS_PORT: "${WAF_HTTPS_PORT:-8443}"          # HTTP→HTTPS 이동할 때 쓰는 포트
+      SSL_CERT_FILE: "/etc/nginx/conf/custom/server.crt"
+      SSL_CERT_KEY_FILE: "/etc/nginx/conf/custom/server.key"
+
       # 인증서를 마운트하지 않으면 컨테이너가 시작할 때 자체 서명 인증서를 생성한다.
       # 정식 인증서를 쓰려면 ./certs 를 /etc/nginx/conf/custom 에 마운트하고 아래 경로를 바꾼다.
       # SSL_CERT_FILE: "/etc/nginx/conf/custom/server.crt"
@@ -50,7 +54,10 @@ services:
       ERRORLOG: "/var/log/waf/error.log"
     volumes:
       - waf-logs:/var/log/waf
-    depends_on:
+      - ./default.conf.template:/etc/nginx/templates/conf.d/default.conf.template:ro
+      - D:/BOLA-project-APP/nginx/certs:/etc/nginx/conf/custom:ro   # nginx 폴더의 인증서
+      - D:/BOLA-project-APP/web:/usr/share/nginx/html:ro              # web 폴더
+   depends_on:
       log-init:
         condition: service_completed_successfully
       test-backend:
