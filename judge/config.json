@@ -1,0 +1,30 @@
+{
+  "redis": {
+    "host": "192.168.0.39",
+    "port": 6379,
+    "stream": "bola:events",
+    "group": "judges",
+    "consumer": "judge-1"
+  },
+  "paths": {
+    "confirmed": "../fluent-bit/confirmed.json",
+    "log": "output/confirmed_log.jsonl",
+    "score_log": "output/score_log.jsonl",
+    "breached": "output/breached_apis.json"
+  },
+  "window_sec": 86400,
+  "threshold": 100,
+  "points": {
+    "BOLA_PATH": 40,
+    "BOLA_LEDGER": 25,
+    "ATTEMPT": 5,
+    "UNKNOWN": 2,
+    "RATE": 20
+  },
+  "bonus": {
+    "victims": {"min": 3, "points": 30},
+    "attempt_then_bola": {"points": 20},
+    "multi_api": {"min": 2, "points": 10}
+  },
+  "path_owners": ["/members/{id}", "/profiles/{id}"]
+}
