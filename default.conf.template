@@ -1,0 +1,51 @@
+# BOLA-project-APP/nginx/nginx.conf 를 modsecurity-crs 이미지용 템플릿으로 옮긴 것
+# - 컨테이너가 nginx(uid 101)로 실행되므로 80/443 대신 8080/8443 사용
+# - ModSecurity는 conf.d/modsecurity.conf 에서 http 전체에 켜져 있음
+
+server_tokens ${SERVER_TOKENS};
+more_set_headers 'Server: ${SERVER_HEADER}';
+
+# HTTP로 오면 HTTPS로 이동
+server {
+    listen ${PORT} default_server;
+    server_name ${SERVER_NAME};
+
+    include includes/location_common.conf;
+
+    location / {
+        return 301 https://$host:${WAF_HTTPS_PORT}$request_uri;
+    }
+}
+
+server {
+    listen ${SSL_PORT} ssl;
+    http2 on;
+    server_name ${SERVER_NAME};
+
+    ssl_certificate     ${SSL_CERT_FILE};
+    ssl_certificate_key ${SSL_CERT_KEY_FILE};
+    ssl_protocols       ${SSL_PROTOCOLS};
+
+    # 메인페이지 (정적 파일, BOLA-project-APP/web)
+    root /usr/share/nginx/html;
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # /api/... → Kong (/api 접두사 제거)
+    # Kong 주소를 요청 때마다 Docker DNS로 찾음 → Kong이 아직 안 떠 있어도 nginx는 시작됨 (그동안 /api 는 502)
+    location /api/ {
+        client_max_body_size 0;
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $kong_upstream ${BACKEND};
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass $kong_upstream;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # location_common.conf 는 넣지 않음: 그 안의 error_page가 web 폴더에 없는 50x.html 을 찾아서
+    # Kong 장애(502)가 404로 바뀌어 보이기 때문 (/healthz 는 HTTP 서버 쪽에 있음)
+}
