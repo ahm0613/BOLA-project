@@ -159,7 +159,8 @@ def check_rate(e):
         return
     blocked_until[me] = t + TEMP_BLOCK_SEC * 1000
     try:
-        r.set(f"blocked:user:{me}", "rate", ex=TEMP_BLOCK_SEC)
+        # nx: 이미 차단 키가 있으면(판단 서버의 영구 차단) 10분짜리로 덮어쓰지 않음
+        r.set(f"blocked:user:{me}", "rate", ex=TEMP_BLOCK_SEC, nx=True)
     except redis.RedisError as err:
         print(f"[Redis] 임시 차단 실패: {err}", flush=True)
     report("RATE", e, f"요청자 {me}: 10초에 의심 요청 {len(q)}번 -> {TEMP_BLOCK_SEC}초 임시 차단")

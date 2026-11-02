@@ -144,6 +144,7 @@ class RecordDbTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         cfg["paths"].update({k: os.path.join(self.tmp, f"{k}.out") for k in cfg["paths"]})
         cfg["db"] = {**cfg.get("db", {}), "enabled": False}
+        cfg["block"] = {"enabled": False}               # 실제 Redis에 차단 키를 걸지 않게 (차단은 test_block.py)
         self.srv = judge.Server(cfg)
         self.rec = self.srv.db = RecorderStub()
         self.t0 = 1793331593000

@@ -61,8 +61,9 @@ def _family(api):
 
 class Judge:
     """사용자별 최근 의심 이벤트를 기억하고 점수를 매겨 확정을 결정"""
-    def __init__(self, cfg, confirmed_users=None):
-        """cfg: config.json 내용. confirmed_users: 이미 확정된 사용자 (재시작 시 confirmed.json에서)"""
+    def __init__(self, cfg, confirmed_users=None, released=None):
+        """cfg: config.json 내용. confirmed_users: 이미 확정된 사용자 (재시작 시 confirmed.json에서)
+        released: 관리자가 해제한 사용자 → 해제 시각(ms). 그 이전 이벤트는 채점하지 않음 (다시 확정되지 않게)"""
         self.window_ms = int(cfg["window_sec"]) * 1000
         self.threshold = cfg["threshold"]
         self.points = cfg["points"]
@@ -77,6 +78,7 @@ class Judge:
         self.level = {}                                 # user_id → 지금까지 올라간 가장 높은 단계 순번 (0=normal)
         self.scores = {}                                # user_id → 마지막으로 계산한 점수 (확정 뒤 이벤트의 risk_score용)
         self.confirmed = set(confirmed_users or [])
+        self.released = {str(u): int(ms) for u, ms in (released or {}).items()}
         self.counts = {"events": 0, "scored": 0, "self_skip": 0, "hits": 0}
 
     def path_owner(self, uri):
@@ -127,11 +129,14 @@ class Judge:
         self.counts["events"] += 1
         item, victim = self.classify(e)
         me = e["user_id"]
-        # 이번 이벤트를 어떻게 채점했는지 (실시간 점수 로그용). status: skip / confirmed_user / scored / confirmed
+        # 이번 이벤트를 어떻게 채점했는지 (실시간 점수 로그용). result: released / skip / confirmed_user / scored / confirmed
         self.last = {"ts": e["ts"], "user_id": me, "kind": e["kind"], "uri": e["uri"], "status": e["status"],
                      "event_api": e["api"], "request_id": e["request_id"], "detail": e["detail"],
                      "item": item, "victim": victim, "points": self.points.get(item, 0) if item else 0,
                      "score": self.scores.get(me)}       # 점수를 다시 계산하지 않는 이벤트(무시·확정 사용자)는 마지막 점수
+        if e["ts"] <= self.released.get(me, 0):           # 관리자가 해제하기 전 이벤트 → 다시 확정하지 않게 채점 안 함
+            self.last["result"] = "released"
+            return []
         if item is None:
             if e["kind"] in ("BOLA", "ATTEMPT"):
                 self.counts["self_skip"] += 1

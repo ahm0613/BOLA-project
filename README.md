@@ -69,6 +69,6 @@ docker compose logs -f judge     # 판단: [점수] … BOLA_PATH +40 = 80/100�
 
 ## 알아 둘 점
 
-- 판단 서버는 **차단하지 않습니다.** 임시 차단은 탐지 엔진의 RATE(10초에 의심 요청 10번 초과 → 10분)만 있고, 판단 서버는 이를 기록만 합니다.
+- 차단은 두 가지입니다. 탐지 엔진의 RATE 임시 차단(10초에 의심 요청 10번 초과 → 10분)과, 판단 서버의 **영구 차단**(100점 확정 → Redis `blocked:user:<id>`를 만료 없이, pc2 Kong이 403). 해제는 `judge/unblock.py` ([`judge/README.md`](judge/README.md) "영구 차단").
 - 공격자로 확정되면 `fluent-bit/confirmed.json`에 올라가고, `ledger_v2.py`가 장부를 학습할 때 그 요청·사용자를 뺍니다 (장부 오염 방지).
 - 자세한 내용은 [`fluent-bit/README.md`](fluent-bit/README.md), [`judge/README.md`](judge/README.md)

@@ -11,8 +11,47 @@ pc2: Kong ─Fluent Bit─▶ pc1: realtime.py + ledger.json ──의심 이벤
                          pc1: ledger_v2.py ◀──── confirmed.json ◀──── pc1: judge.py (이 폴더)
 ```
 
-판단 서버는 **차단하지 않습니다** (`blocked:user:N`을 건드리지 않음). `realtime.py`의 RATE 임시 차단은 그대로이고, 판단 서버는 그 보고를 받아 기록만 합니다.
+판단 서버는 공격자를 확정하는 순간 **영구 차단**합니다 (아래 "영구 차단"). `realtime.py`의 RATE 10분 임시 차단은 그대로입니다.
 판단·조치·사용자 상태는 **PostgreSQL**에 기록해서 pc3 Streamlit이 읽습니다 (아래 "DB 연동").
+
+## 영구 차단
+
+pc2 Kong은 요청마다 Redis `blocked:user:<id>`를 조회해서 **키가 있으면 403**으로 막습니다 (`kong.yml` post-function, 값·만료는 보지 않음).
+판단 서버는 100점을 넘어 확정되는 순간 이 키를 **만료 없이** 겁니다 (`blocker.py`, pc2 담당자가 정한 방식).
+
+```
+judge.py 확정 ─┬─▶ Redis SET blocked:user:<id> "confirmed"  (TTL 없음 = 영구)
+              │         HSET block:info:<id> reason, blocked_at, by
+              ├─▶ confirmed.json users (= 영구 차단 명단, 장부 학습 제외)
+              └─▶ DB bola_events: AC-<스트림ID>-L  applied(차단·저장 성공) / failed
+pc2 Kong ── 요청마다 GET blocked:user:<id> ──▶ 있으면 403 "blocked by security policy"
+```
+
+- **명단 동기화:** 실시간 모드에서 시작할 때와 60초마다(`block.sync_sec`) `confirmed.json`의 확정 사용자 중 영구 키가 없거나 만료가 붙은 사용자를 다시 겁니다. Redis가 초기화되거나 차단에 실패했을 때 복구됩니다. **시작하면 기존 확정 사용자(1, 2)도 이때 차단됩니다.**
+- `realtime.py`의 RATE는 `nx=True`로 걸어서 영구 키를 10분짜리로 덮어쓰지 않습니다.
+- Redis가 꺼져 있어도 판단은 멈추지 않습니다. 조치가 `failed`로 기록되고 다음 동기화 때 다시 겁니다.
+- 끄려면 `config.json`의 `"block": {"enabled": false}`. `--dry-run`이면 차단하지 않습니다.
+- 지금 차단된 사용자 보기: `python unblock.py --list` (컨테이너: `docker compose run --rm judge python unblock.py --list`)
+
+### 해제 (오탐일 때)
+
+판단 서버가 켜져 있으면 메모리의 명단으로 `confirmed.json`을 덮어쓰고 다시 차단하므로 **멈춘 뒤** 해제합니다. 켜져 있으면 스크립트가 거부합니다.
+
+```bash
+cd /mnt/d/python-rule
+docker compose stop judge
+docker compose run --rm judge python unblock.py 7 --by 관리자이름 --note "장부 오류, 본인 주문"
+docker compose start judge
+```
+
+| 하는 일 | 결과 |
+|---|---|
+| Redis `blocked:user:7`, `block:info:7` 삭제 | 다음 요청부터 Kong 통과 |
+| `confirmed.json` `users`에서 빼고 `released`에 해제 시각 기록 | 판단 서버가 **해제 이전 이벤트로는 다시 확정하지 않음** (해제 이후 새 공격은 다시 채점) |
+| `output/confirmed_log.jsonl`에 `type: release` 한 줄 | 누가·언제·왜 해제했는지 |
+| DB: 확정 조치 `enforcement_status = released`, `released_at`, `user_status = normal` | 대시보드에 해제 반영 |
+
+`requests`의 요청 ID는 그대로 두므로 장부 학습에서는 계속 빠집니다.
 
 ## DB 연동 (pc3 Streamlit용)
 
@@ -44,12 +83,12 @@ pc3  Streamlit ──────────── 몇 초마다 SELECT ──�
 | `user_status`, `user_status_updated_at` | 그 시점 사용자 상태(normal/watch/warning/confirmed), 상태가 바뀐 시각 | 판단 서버 |
 | `action_id`, `action_reason`, `decided_at`, `enforcement_status`, `enforced_at`, `expires_at`, `released_at` | 조치가 있는 이벤트에만 (없으면 NULL) | 판단 서버 |
 
-조치는 실제로 일어나는 두 가지만 기록합니다 (판단 서버는 차단하지 않음):
+조치는 실제로 일어나는 두 가지만 기록합니다:
 
 | `action_id` | 언제 | 상태 |
 |---|---|---|
 | `AC-<스트림ID>-R` | RATE 이벤트 = realtime.py의 10분 임시 차단 | `applied` → `expires_at`이 지나면 판단 서버가 `expired` + `released_at` |
-| `AC-<스트림ID>-L` | 공격 확정 → `confirmed.json` 등록 (장부 학습에서 제외) | 저장 성공 `applied`, 실패 `failed`. 만료 없음 |
+| `AC-<스트림ID>-L` | 공격 확정 → **영구 차단** + `confirmed.json` 등록 (장부 학습에서 제외) | 차단·저장 둘 다 성공 `applied`, 하나라도 실패 `failed`. 만료 없음. 관리자 해제 시 `released` + `released_at` |
 
 - 판정 루프는 큐에 넣기만 하고, 쓰기는 저장 스레드가 합니다. DB가 꺼져 있어도 판단은 계속되고, 다시 연결되면 밀린 것을 씁니다.
 - `stream_id`가 같으면 한 번만 들어가므로, 판단 서버를 다시 시작해 과거 이벤트를 다시 읽어도 중복되지 않습니다.
@@ -100,16 +139,18 @@ pc3 ──▶ pc1 192.168.0.40:5432 ──portproxy──▶ WSL 172.22.x.x:5432
 ```json
 {
   "requests": ["979917aa-...", "4ca321f0-..."],
-  "users": {"2": 1793266756647, "1": 1793266895188}
+  "users": {"2": 1793266756647, "1": 1793266895188},
+  "released": {"7": 1793400000000}
 }
 ```
 
 | 키 | 들어가는 것 |
 |---|---|
 | `requests` | URL로 확인된 BOLA 요청 (사용자 확정 전이라도), 확정된 사용자의 의심 요청 전부 (확정 전·후) |
-| `users` | 점수가 기준(100점)을 넘은 사용자 → 값은 **그 사용자의 첫 의심 이벤트 시각(ms)**. 이 시각 이후 요청은 학습에서 제외 |
+| `users` | 점수가 기준(100점)을 넘은 사용자 → 값은 **그 사용자의 첫 의심 이벤트 시각(ms)**. 이 시각 이후 요청은 학습에서 제외. **영구 차단 명단**이기도 함 |
+| `released` | `unblock.py`로 해제한 사용자 → 해제 시각(ms). 이 시각 이전 이벤트는 채점하지 않음 (해제한 사용자가 재시작 때 다시 확정되지 않게). `ledger_v2.py`는 읽지 않음 |
 
-- 한 번 들어간 값은 판단 서버가 지우지 않습니다. **잘못 확정되면 사람이 파일에서 직접 지웁니다.**
+- 판단 서버는 한 번 들어간 값을 지우지 않습니다. **잘못 확정되면 `unblock.py`로 해제합니다** (파일을 직접 고치지 않음).
 - 확정할 때마다 근거(점수 내역, 피해자, 자원 종류, 이벤트 수)가 `output/confirmed_log.jsonl`에 한 줄씩 남습니다.
 - 임시 파일에 쓴 뒤 바꿔치기하므로, 다른 프로그램이 쓰다 만 파일을 읽지 않습니다.
 
@@ -182,11 +223,16 @@ python -m unittest discover tests
 | `scripts/bola-startup.ps1`, `scripts/register-startup-task.ps1` | 로그온 시 자동 시작 (컨테이너 `up -d` + 포트 전달 5432·5170). 등록은 관리자로 한 번, 결과는 `output/startup.log` |
 | `scripts/wsl-portproxy.ps1` | LAN → pc1 → WSL 포트 전달 + 방화벽 (관리자, WSL IP가 바뀌면 다시 실행). 5432(DB, `-Remote 192.168.0.26`), 5170(로그 수신, `-Port 5170 -Name "bola realtime"`) |
 | `scoring.py` | 점수·확정 로직 (Redis를 몰라서 테스트하기 쉬움) |
-| `store.py` | `confirmed.json` 읽기·쓰기, 확정 근거 기록 |
-| `config.json` | Redis 주소, 점수, 기준, 시간 창, 경로 |
+| `store.py` | `confirmed.json` 읽기·쓰기(해제 포함), 확정 근거 기록 |
+| `blocker.py` | Redis 영구 차단 키 걸기·명단 동기화·해제 |
+| `unblock.py` | 관리자용: 차단 목록 보기(`--list`), 영구 차단 해제 (판단 서버를 멈춘 뒤) |
+| `import_confirmed.py` | 관리자용: 설치 전 이력 분석 결과(`confirmed1.json`)를 확정 명단에 합치고 영구 차단 (판단 서버를 멈춘 뒤, `--dry-run`으로 미리 보기) |
+| `config.json` | Redis 주소, 점수, 기준, 시간 창, 경로, 영구 차단(`block`) |
 | `.env` | Redis 비밀번호 (git 제외) |
 | `tests/test_scoring.py` | 점수, 오탐 거르기, 보너스, 시간 창, 파일 형식 테스트 |
+| `tests/test_block.py` | 영구 차단, RATE 덮어쓰기 방지, 명단 동기화, Redis 장애, 해제 테스트 |
 
 ## 남은 일
 
-- 차단을 판단 서버로 옮기기 (`blocked:user:N`)
+- pc2 실제 Kong이 Redis 비밀번호로 `auth`하는지 확인 (`archive/BOLA-APP/kong/kong.yml` 사본에는 `red:auth`가 없음. 없으면 키를 걸어도 막히지 않음)
+- 자동 영구 차단 대신 "자동 장기 차단 + 관리자 확정"이 필요해지면 `block` 설정에 기간 추가

@@ -11,6 +11,10 @@
 DB 기록 (pc3 Streamlit용, db.py): Redis 이벤트 한 건마다 bola_events 한 행(Redis 값 + 판단 + 조치), 사용자 상태는 user_status.
   접속 정보는 .env의 PG_*. DB가 없거나 꺼져 있어도 판단은 계속하고, --dry-run이면 DB에도 쓰지 않음.
 
+영구 차단 (blocker.py, config.json의 block): 공격 확정 순간 Redis blocked:user:<id>를 만료 없이 걸어 pc2 Kong이 막게 함.
+  실시간 모드에서는 시작할 때와 block.sync_sec마다 confirmed.json 명단과 Redis 차단 키를 맞춤 (빠진 키를 다시 걺).
+  --dry-run이면 차단하지 않음. 해제는 unblock.py.
+
 시작할 때 최근 window_sec 이벤트를 다시 읽어 점수를 복원한 뒤, 그 다음 이벤트부터 그룹으로 받는다.
 (복원에서 이미 본 이벤트가 그룹으로 다시 오면 점수에 두 번 넣지 않고 ACK만 한다)
 접속 정보: config.json의 redis.*, 비밀번호는 .env의 REDIS_PASSWORD (없으면 비밀번호 없이 접속)
@@ -25,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 import redis
 
 import db
+from blocker import Blocker
 from scoring import Judge, parse_event
 from store import ConfirmedStore
 
@@ -113,7 +118,7 @@ class Server:
                              socket_timeout=10, socket_keepalive=True)    # block(5초)보다 길게
         self.stream, self.group, self.me = rc["stream"], rc["group"], rc["consumer"]
         self.store = ConfirmedStore(cfg["paths"]["confirmed"], None if dry_run else cfg["paths"]["log"])
-        self.judge = Judge(cfg, confirmed_users=self.store.users.keys())
+        self.judge = Judge(cfg, confirmed_users=self.store.users.keys(), released=self.store.released)
         self.dry_run = dry_run
         self.last_id = (0, 0)                           # 지금까지 채점한 마지막 스트림 ID
         self.last_status = time.time()
@@ -126,6 +131,19 @@ class Server:
         self.db = make_db(cfg, dry_run)
         self.rate_sec = (cfg.get("db") or {}).get("rate_block_sec", 600)   # realtime.py의 RATE 임시 차단 길이
         self.user_state = {}                              # user_id → (사용자 상태, 그 상태로 바뀐 시각)
+        bc = cfg.get("block") or {}
+        self.blocker = Blocker(self.r) if bc.get("enabled") and not dry_run else None
+        self.sync_sec = bc.get("sync_sec", 60)
+        self.last_sync = 0.0
+
+    def sync_blocks(self, force=False):
+        """sync_sec마다 confirmed.json 명단 ↔ Redis 영구 차단 키 맞춤 (Redis 초기화, RATE 10분 키 덮어쓰기 대비)"""
+        if not self.blocker or (not force and time.time() - self.last_sync < self.sync_sec):
+            return
+        self.last_sync = time.time()
+        n = self.blocker.sync(self.store.users)
+        if n or force:
+            print(f"[차단] 명단 동기화: 확정 사용자 {len(self.store.users)}명 중 {n}명 새로 영구 차단", flush=True)
 
     def handle(self, stream_id, fields):
         """이벤트 하나 처리. 이미 채점한 ID면 건너뜀 (True: 새로 채점함)"""
@@ -142,6 +160,7 @@ class Server:
         if self.judge.counts["hits"] != self.saved_hits:    # 새로 털린 (API, 피해자)가 생기면 파일 갱신
             self.save_breached()
         saved = False
+        blocked = None                                  # 영구 차단 결과 (차단 기능이 꺼져 있으면 None)
         if decisions and self.store.apply(decisions):
             if not self.dry_run:
                 try:
@@ -155,20 +174,24 @@ class Server:
                           f"피해자 {d['victims']} 요청 {len(d['request_ids'])}건", flush=True)
                     for api, victims in d["apis_hit"].items():
                         print(f"        털린 API: {api} {fmt_ids(victims)}", flush=True)
+                    if self.blocker:                    # confirmed.json 저장에 실패해도 차단은 함 (보안 우선)
+                        blocked = self.blocker.block_forever(
+                            d["user_id"], f"공격 확정: 점수 {d['score']} {d['breakdown']} 피해자 {d['victims']}")
                 elif d["user_id"] not in self.store.users:  # 확정 사용자의 요청 추가는 건수로만 (상태 줄)
                     print(f"[요청] 사용자 {d['user_id']} {d['reason']}", flush=True)
         if self.db:
-            self.record_db(stream_id, decisions, saved)
+            self.record_db(stream_id, decisions, saved, blocked)
         return True
 
-    def record_db(self, stream_id, decisions, saved):
+    def record_db(self, stream_id, decisions, saved, blocked=None):
         """방금 채점한 Redis 이벤트 한 건을 bola_events 한 행으로 (Redis 값 + 그 시점의 판단 + 조치), 사용자 상태도 갱신
-        실제 쓰기는 db.py 저장 스레드. 조치는 두 가지만 기록 (판단 서버는 차단하지 않음):
+        실제 쓰기는 db.py 저장 스레드. 조치는 두 가지:
           AC-<스트림ID>-R  RATE 이벤트 = realtime.py의 임시 차단 (만료 시각 = 이벤트 + rate_block_sec)
-          AC-<스트림ID>-L  공격 확정 → confirmed.json 등록 (저장 성공 applied / 실패 failed)"""
+          AC-<스트림ID>-L  공격 확정 → 영구 차단(blocked:user:N, 만료 없음) + confirmed.json 등록
+                           둘 다 성공 applied / 하나라도 실패 failed. blocked=None(차단 기능 꺼짐)이면 confirmed.json만"""
         t = self.judge.last
-        if not t or not t.get("result"):
-            return
+        if not t or not t.get("result") or t["result"] == "released":
+            return                                      # 해제 이전 이벤트는 그때 이미 기록됨 (정리한 DB에 다시 넣지 않음)
         u, now, ts = t["user_id"], datetime.now(KST), to_dt(t["ts"])
         result = t["result"]
 
@@ -195,8 +218,13 @@ class Server:
                          ts, "applied", ts, ts + timedelta(seconds=self.rate_sec)))
         if any(d["type"] == "user" for d in decisions):
             d = next(d for d in decisions if d["type"] == "user")
-            acts.append(("L", f"공격 확정 ({d['reason']}) → confirmed.json 등록, 장부 학습에서 제외",
-                         now, "applied" if saved else "failed", now if saved else None, None))
+            if blocked is None:
+                text, ok = f"공격 확정 ({d['reason']}) → confirmed.json 등록, 장부 학습에서 제외", saved
+            else:
+                text = (f"공격 확정 ({d['reason']}) → 영구 차단 blocked:user:{u} "
+                        f"({'성공' if blocked else '실패, 동기화 때 재시도'}) + confirmed.json 등록, 장부 학습에서 제외")
+                ok = saved and blocked
+            acts.append(("L", text, now, "applied" if ok else "failed", now if ok else None, None))
         action = {}
         if acts:
             action = {
@@ -232,7 +260,9 @@ class Server:
         when = datetime.fromtimestamp(t["ts"] / 1000, KST).strftime("%H:%M:%S")
         head = f"[점수] {when} 사용자 {t['user_id']} {t['kind']} {t['status']} {t['uri']} →"
         result = t.get("result")
-        if result == "skip":
+        if result == "released":
+            line = f"{head} 무시: 관리자가 해제한 사용자의 해제 이전 이벤트"
+        elif result == "skip":
             why = "URL 번호가 본인 (장부 오탐)" if t["kind"] in ("BOLA", "ATTEMPT") else "채점 대상 아님"
             line = f"{head} 무시: {why}"
         elif result == "confirmed_user":
@@ -286,6 +316,7 @@ class Server:
                     self.handle(i, f or {})              # ACK 뒤 잘린 항목은 f가 비어 있을 수 있음
                     self.r.xack(self.stream, self.group, i)
                 self.status()
+                self.sync_blocks()
 
     def status(self, force=False):
         """STATUS_SEC마다 처리 건수와 점수 상위 사용자 출력"""
@@ -296,6 +327,9 @@ class Server:
         top = ", ".join(f"{u}:{s}" for s, u, _, _ in self.judge.top(5)) or "없음"
         print(f"[상태] 이벤트 {c['events']} (채점 {c['scored']}, 본인 번호 제외 {c['self_skip']}) "
               f"확정 사용자 {len(self.store.users)} 확정 요청 {len(self.store.requests)} | 점수 상위 {top}", flush=True)
+        if self.blocker:
+            b = self.blocker.counts
+            print(f"[차단] 영구 차단 {b['blocked']}건 (실패 {b['failed']})", flush=True)
         for api, row in self.judge.breached().items():
             print(f"[털린 API] {api} 피해자 {fmt_ids(row['victims'])} ← 공격자 {fmt_ids(row['attackers'])}", flush=True)
         if self.db:
@@ -337,7 +371,7 @@ def main():
     srv.trace = args.trace
     rc = cfg["redis"]
     print(f"[시작] Redis {rc['host']}:{rc['port']} {rc['stream']} → {cfg['paths']['confirmed']}"
-          f"{' (dry-run)' if args.dry_run else ''}", flush=True)
+          f"{' (dry-run)' if args.dry_run else ''} | 영구 차단 {'켜짐' if srv.blocker else '꺼짐'}", flush=True)
 
     while True:                                         # 시작할 때 Redis가 아직 안 떠 있어도 기다림
         try:
@@ -354,6 +388,7 @@ def main():
             srv.db.close()                              # 남은 DB 기록을 다 쓰고 끝냄
         srv.status(force=True)
         return
+    srv.sync_blocks(force=True)                         # 이미 확정된 사용자(confirmed.json)도 영구 차단 키를 맞춤
     srv.status(force=True)
 
     srv.trace = not args.quiet                          # 실시간으로 들어오는 이벤트는 점수 줄을 보여 줌

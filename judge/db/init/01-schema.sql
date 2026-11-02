@@ -25,11 +25,11 @@ CREATE TABLE bola_events (
 
   -- 조치 (있을 때만, 없으면 NULL)
   --   AC-<스트림ID>-R : RATE = 탐지 엔진(realtime.py)의 임시 차단 (판단 서버는 기록만)
-  --   AC-<스트림ID>-L : 공격 확정 → confirmed.json 등록 (장부 학습에서 제외, 만료 없음)
+  --   AC-<스트림ID>-L : 공격 확정 → 영구 차단(blocked:user:N) + confirmed.json 등록 (만료 없음, 해제는 unblock.py)
   action_id              TEXT,                 -- 제한·차단 조치 ID
   action_reason          TEXT,                 -- 제한·차단 사유
   decided_at             TIMESTAMPTZ,          -- 조치 결정 시각
-  enforcement_status     TEXT,                 -- applied / failed / expired
+  enforcement_status     TEXT,                 -- applied / failed / expired(RATE 만료) / released(관리자 해제)
   enforced_at            TIMESTAMPTZ,          -- 실제 조치 적용 시각
   expires_at             TIMESTAMPTZ,          -- 임시 제한 만료 시각 (RATE)
   released_at            TIMESTAMPTZ           -- 실제 제한 해제 시각 (만료되면 판단 서버가 채움)

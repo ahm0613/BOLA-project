@@ -3,7 +3,9 @@
 역할: 판단 서버의 출구. ledger_v2.py가 장부를 학습할 때 이 파일의 요청·사용자를 빼고 학습한다.
 
   {"requests": ["979917aa-...", ...],         확정된 공격 요청 request_id
-   "users": {"43": 1792681200000, ...}}       확정된 사용자 → 이 시각(ms) 이후 요청을 학습에서 제외
+   "users": {"43": 1792681200000, ...},       확정된 사용자 → 이 시각(ms) 이후 요청을 학습에서 제외 (= 영구 차단 명단)
+   "released": {"7": 1793400000000, ...}}     관리자가 해제한 사용자 → 이 시각(ms) 이전 이벤트로는 다시 확정하지 않음
+                                              (unblock.py가 씀. ledger_v2.py는 이 키를 읽지 않음)
 
 파일은 임시 파일에 쓴 뒤 바꿔치기해서, 다른 프로그램이 쓰다 만 파일을 읽지 않게 한다.
 """
@@ -15,7 +17,7 @@ KST = timezone(timedelta(hours=9))
 
 
 class ConfirmedStore:
-    """확정 목록. 한 번 들어간 요청·사용자는 지우지 않음 (잘못 확정되면 사람이 파일에서 직접 지움)"""
+    """확정 목록. 판단 서버는 한 번 들어간 요청·사용자를 지우지 않음 (잘못 확정되면 unblock.py로 해제)"""
     def __init__(self, path, log_path):
         """path: confirmed.json, log_path: 확정 근거를 한 줄씩 남길 jsonl"""
         self.path = path
@@ -23,12 +25,14 @@ class ConfirmedStore:
         self.requests = []
         self._request_set = set()
         self.users = {}
+        self.released = {}
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             for rid in data.get("requests") or []:
                 self._add_request(rid)
             self.users = {str(k): int(v) for k, v in (data.get("users") or {}).items()}
+            self.released = {str(k): int(v) for k, v in (data.get("released") or {}).items()}
         if log_path:
             os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
 
@@ -55,6 +59,17 @@ class ConfirmedStore:
                 self._log({**d, "added_requests": len(added)})
         return changed
 
+    def release(self, user_id, at_ms, by, note):
+        """관리자 해제: 확정 사용자 명단에서 빼고 해제 시각을 남김 (요청 목록은 그대로 → 장부 학습에서는 계속 제외).
+        명단에 없던 사용자면 False"""
+        user_id = str(user_id)
+        if user_id not in self.users:
+            return False
+        del self.users[user_id]
+        self.released[user_id] = int(at_ms)
+        self._log({"type": "release", "user_id": user_id, "by": by, "note": note, "released_at": int(at_ms)})
+        return True
+
     def _log(self, d):
         """확정 근거 한 줄 기록 (사람이 오탐 여부를 판단할 때 봄). log_path가 None이면 기록 안 함 (dry-run)"""
         if not self.log_path:
@@ -70,5 +85,8 @@ class ConfirmedStore:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"requests": self.requests, "users": self.users}, f, ensure_ascii=False, indent=2)
+            data = {"requests": self.requests, "users": self.users}
+            if self.released:
+                data["released"] = self.released
+            json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, self.path)

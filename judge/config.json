@@ -16,6 +16,7 @@
   "threshold": 100,
   "levels": {"watch": 30, "warning": 60},
   "db": {"enabled": true, "flush_sec": 1, "sweep_sec": 10, "rate_block_sec": 600},
+  "block": {"enabled": true, "sync_sec": 60},
   "points": {
     "BOLA_PATH": 40,
     "BOLA_LEDGER": 25,
