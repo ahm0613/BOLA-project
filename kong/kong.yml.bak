@@ -1,0 +1,85 @@
+_format_version: "3.0"
+
+services:
+  - name: auth-service
+    url: http://auth:3000
+    routes:
+      - name: auth-route
+        paths: [/auth]
+        strip_path: false        # /auth/login 그대로 전달
+    # jwt 플러그인 없음 (로그인은 토큰 없이 호출)
+    - name: members-service
+    url: http://members:3000
+    routes:
+      - name: members-route
+        paths: [/members]
+        strip_path: false
+    plugins:
+      - name: jwt
+        config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+  - name: profiles-service
+    url: http://profiles:3000
+    routes:
+      - name: profiles-route
+        paths: [/profiles]
+        strip_path: false
+    plugins:
+      - name: jwt
+        config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+  - name: orders-service
+    url: http://orders:3000
+    routes:
+      - name: orders-route
+        paths: [/orders]
+        strip_path: false
+    plugins:
+      - name: jwt
+        config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+  - name: payments-service
+    url: http://payments:3000
+    routes:
+      - name: payments-route
+        paths: [/payments]
+        strip_path: false
+    plugins:
+      - name: jwt
+        config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+consumers:
+  # 사용자별 consumer가 아니라 "우리 인증 서버" 발급자 하나만 등록
+  # 실제 사용자 구분은 토큰의 sub로 함
+  - username: bola-auth-issuer
+    jwt_secrets:
+      - key: bola-auth            # 토큰의 iss 값과 일치해야 함
+        algorithm: RS256
+        rsa_public_key: |
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxPch92i9a2Lf5ninJ7et
+          k/5rT4WVqWEqAkKJAFWEdX7zvUl3ZakPUKZmUinj1HasaM+cvPwlZIoYOdTT2XO1
+          SogB75iGCu5doPYSvqh9L18E3ZT9XO7rFnKNglDWW+0oPQo/eQs03nvF1mZGV9Sa
+          /46ghaLOk31vCcVr69zK/kKWH2TqO/oM6yStIH0unEUxDlQ3gpHNvUoOi8E29D1U
+          tx6SpcnnvolhWFO1JtHA92fXPixLAF+Q2CSWUca084IMQLly2vvygZ2kduORmhFU
+          p6mVIcHJGE7IcJDqvLi4BLZpMSNUm5Mq70GSjv1FNAjy23VyDgPZhYHvTkqj7Pno
+          3wIDAQAB
+          -----END PUBLIC KEY-----
+
+plugins:
+  # 요청마다 X-Request-ID 부여 → API 서버까지 전달 → 로그를 서로 연결하는 키
+  - name: correlation-id
+    config:
+      header_name: X-Request-ID
+      generator: uuid
+      echo_downstream: true
+
+  # 요청 1건 = JSON 1줄 → Wazuh Agent가 읽음
+  - name: file-log
+    config:
+      path: /logs/kong/access.json
+      reopen: truees.json
+      reopen: truess.json
+      reopen: truess.json
+      reopen: trues.json
+      reopen: true

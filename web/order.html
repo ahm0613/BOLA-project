@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>주문 상세 | BOLA Shop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page wrap" style="max-width:860px">
+    <a class="small" href="/mypage.html">← 주문 · 배송 조회</a>
+    <div class="alert" id="done" style="margin-top:12px" hidden>주문이 완료됐어요. 결제 내역과 배송 상황은 이 화면에서 확인할 수 있어요.</div>
+    <p id="error" class="alert" style="margin-top:12px" hidden></p>
+
+    <div id="order" hidden>
+      <section class="panel" style="margin-top:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><h1 style="font-size:20px">주문 상세</h1><div class="small" id="number"></div></div>
+          <span class="tag dark" id="status"></span>
+        </div>
+        <div class="steps" id="steps"></div>
+        <div class="steps-label" id="steps-label"></div>
+      </section>
+
+      <section class="panel" style="margin-top:16px">
+        <h3>주문 상품</h3>
+        <div id="items"></div>
+      </section>
+
+      <section class="panel" style="margin-top:16px">
+        <h3 style="margin-bottom:12px">배송지</h3>
+        <dl class="kv" id="shipping"></dl>
+        <form id="memo-form" style="display:flex;gap:8px;margin-top:14px" hidden>
+          <input type="text" id="memo" maxlength="200" placeholder="배송 메모를 남겨 주세요">
+          <button class="btn" type="submit" style="flex:none">메모 변경</button>
+        </form>
+      </section>
+
+      <section class="panel" style="margin-top:16px">
+        <h3 style="margin-bottom:12px">결제 정보</h3>
+        <div class="sum-row"><span>상품 금액</span><span id="p-items"></span></div>
+        <div class="sum-row"><span>쿠폰 할인</span><span id="p-discount"></span></div>
+        <div class="sum-row"><span>배송비</span><span id="p-ship"></span></div>
+        <div class="sum-row" id="p-points-row" hidden><span>적립금 사용</span><span id="p-points"></span></div>
+        <div class="sum-row total"><span>결제 금액</span><span id="p-total"></span></div>
+        <dl class="kv" id="payment" style="margin-top:14px"></dl>
+      </section>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn" id="cancel" hidden>주문 취소</button>
+        <a class="btn dark" href="/products.html">쇼핑 계속하기</a>
+      </div>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    requireLogin();
+    const id = params.get('id');
+    const FLOW = ['paid', 'preparing', 'shipped', 'delivered'];
+    const FLOW_LABEL = ['주문 접수', '결제 완료', '상품 준비중', '배송중', '배송 완료'];
+    document.getElementById('done').hidden = params.get('done') !== '1';
+
+    function drawSteps(status) {
+      const step = status === 'cancelled' ? -1 : status === 'pending' ? 0 : FLOW.indexOf(status) + 1;
+      document.getElementById('steps').replaceChildren(...FLOW_LABEL.map((_, i) => el('i', { class: i <= step ? 'on' : null })));
+      document.getElementById('steps-label').replaceChildren(...FLOW_LABEL.map((t, i) => el('span', { class: i === step ? 'on' : null }, t)));
+    }
+
+    (async () => {
+      const o = await api(`/orders/${encodeURIComponent(id)}`);
+      document.getElementById('number').textContent = `${o.order_number} · ${fmtDateTime(o.created_at)}`;
+      document.getElementById('status').textContent = ORDER_STATUS[o.status] ?? o.status;
+      drawSteps(o.status);
+
+      document.getElementById('items').append(...o.items.map((it) => el('div', { class: 'line-item' },
+        el('a', { class: 'thumb', href: it.product_id ? `/product.html?id=${it.product_id}` : null }, el('img', { src: imgSrc(it.image), alt: '' })),
+        el('div', { class: 'grow' },
+          it.brand ? el('div', { class: 'small' }, it.brand) : null,
+          it.product_name,
+          el('div', { class: 'small' }, `${won(it.unit_price)} · ${it.quantity}개`)),
+        o.status === 'delivered' ? el('a', { class: 'btn sm', href: '/mypage.html?tab=reviews' }, '리뷰 쓰기') : null,
+        el('b', { style: 'margin-left:12px' }, won(it.unit_price * it.quantity)))));
+
+      document.getElementById('shipping').append(
+        el('dt', {}, '받는 분'), el('dd', {}, o.recipient_name),
+        el('dt', {}, '연락처'), el('dd', {}, o.recipient_phone),
+        el('dt', {}, '주소'), el('dd', {}, `(${o.zipcode}) ${o.address1} ${o.address2 ?? ''}`),
+        el('dt', {}, '배송 메모'), el('dd', { id: 'memo-view' }, o.delivery_memo ?? '-'));
+
+      document.getElementById('p-items').textContent = won(o.total_amount);
+      document.getElementById('p-discount').textContent = o.discount_amount ? `-${won(o.discount_amount)}` : '0원';
+      document.getElementById('p-ship').textContent = o.shipping_fee ? won(o.shipping_fee) : '무료';
+      document.getElementById('p-total').textContent = won(o.final_amount);
+
+      // 결제 정보: 내 결제 목록에서 이 주문의 결제를 찾아 상세 조회
+      const pay = (await api('/payments')).find((p) => p.order_id === o.id);
+      if (pay) {
+        const p = await api(`/payments/${pay.id}`);
+        if (p.points_used) {
+          document.getElementById('p-points-row').hidden = false;
+          document.getElementById('p-points').textContent = `-${won(p.points_used)}`;
+        }
+        const detail = p.method === 'card' ? `${p.card_company ?? ''} ${p.card_number_masked ?? ''}`
+          : p.bank_name ? `${p.bank_name} ${p.account_masked ?? ''}` : '';
+        document.getElementById('payment').append(
+          el('dt', {}, '결제 수단'), el('dd', {}, `${PAY_METHOD[p.method] ?? p.method} ${detail}`),
+          el('dt', {}, '결제 상태'), el('dd', {}, PAY_STATUS[p.status] ?? p.status),
+          el('dt', {}, '결제 일시'), el('dd', {}, fmtDateTime(p.paid_at)),
+          el('dt', {}, '거래 번호'), el('dd', {}, p.transaction_id ?? '-'));
+      }
+
+      const changeable = ['pending', 'paid', 'preparing'].includes(o.status);
+      const memoForm = document.getElementById('memo-form');
+      memoForm.hidden = !changeable;
+      document.getElementById('memo').value = o.delivery_memo ?? '';
+      memoForm.onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          const r = await api(`/orders/${o.id}/delivery-memo`, { method: 'PATCH', body: { memo: document.getElementById('memo').value.trim() } });
+          document.getElementById('memo-view').textContent = r.delivery_memo || '-';
+          toast('배송 메모를 변경했어요.');
+        } catch (ex) { toast(errorText(ex)); }
+      };
+
+      const cancel = document.getElementById('cancel');
+      cancel.hidden = !['pending', 'paid'].includes(o.status);
+      cancel.onclick = async () => {
+        if (!confirm('주문을 취소할까요?')) return;
+        try {
+          await api(`/orders/${o.id}/cancel`, { method: 'POST' });
+          toast('주문을 취소했어요.');
+          setTimeout(() => location.reload(), 800);
+        } catch (ex) { toast(errorText(ex)); }
+      };
+      document.getElementById('order').hidden = false;
+    })().catch((ex) => showError(ex));
+  </script>
+</body>
+</html>

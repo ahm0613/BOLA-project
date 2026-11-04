@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>주문서 | BOLA Shop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page wrap">
+    <h1 style="margin-bottom:18px">주문서</h1>
+    <p id="error" class="alert" hidden></p>
+    <div class="two-col">
+      <div>
+        <section class="panel">
+          <h3>배송지</h3>
+          <div class="radio-list" id="addresses" style="margin-top:12px"></div>
+          <label class="field" style="margin:12px 0 0"><span>배송 메모</span>
+            <select id="memo">
+              <option value="">선택 안 함</option>
+              <option>문 앞에 놓아주세요</option>
+              <option>경비실에 맡겨주세요</option>
+              <option>배송 전에 연락 주세요</option>
+              <option>택배함에 넣어주세요</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="panel" style="margin-top:16px">
+          <h3>주문 상품 <span class="small" id="item-count"></span></h3>
+          <div id="items"></div>
+        </section>
+
+        <section class="panel" style="margin-top:16px">
+          <h3 style="margin-bottom:12px">할인 · 적립금</h3>
+          <label class="field"><span>쿠폰</span><select id="coupon"><option value="">사용 안 함</option></select></label>
+          <label class="field" style="margin:0"><span id="points-label">적립금</span>
+            <div style="display:flex;gap:8px">
+              <input type="number" id="points" value="0" min="0" step="100">
+              <button class="btn" type="button" id="points-all" style="flex:none">모두 사용</button>
+            </div>
+          </label>
+        </section>
+
+        <section class="panel" style="margin-top:16px">
+          <h3 style="margin-bottom:12px">결제 수단</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap" id="methods"></div>
+        </section>
+      </div>
+
+      <aside class="panel summary">
+        <h3 style="margin-bottom:10px">결제 금액</h3>
+        <div class="sum-row"><span>상품 금액</span><span id="s-items"></span></div>
+        <div class="sum-row"><span>쿠폰 할인</span><span id="s-coupon"></span></div>
+        <div class="sum-row"><span>배송비</span><span id="s-ship"></span></div>
+        <div class="sum-row"><span>적립금 사용</span><span id="s-points"></span></div>
+        <div class="sum-row total"><span>최종 결제 금액</span><span id="s-total"></span></div>
+        <label class="small" style="display:flex;gap:6px;margin-top:14px"><input type="checkbox" id="agree"> 주문 내용을 확인했으며 결제에 동의합니다.</label>
+        <button class="btn dark block" id="pay" style="margin-top:12px">결제하기</button>
+      </aside>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    const s = requireLogin();
+    const ids = (params.get('items') ?? '').split(',').map(Number).filter(Boolean);
+    const METHODS = { card: '신용카드', bank_transfer: '계좌이체', virtual_account: '가상계좌' };
+    let items = [], coupons = [], myPoints = 0, method = 'card';
+
+    const subtotal = () => items.reduce((sum, it) => sum + it.final_price * it.quantity, 0);
+    function couponDiscount() {
+      const c = coupons.find((x) => String(x.id) === document.getElementById('coupon').value);
+      if (!c) return 0;
+      return c.discount_type === 'percent' ? Math.floor(subtotal() * c.discount_value / 100) : Math.min(c.discount_value, subtotal());
+    }
+    function calc() {
+      const sum = subtotal();
+      const ship = sum >= 50000 ? 0 : 3000;
+      const disc = couponDiscount();
+      const max = Math.min(myPoints, sum - disc + ship);
+      const pointsInput = document.getElementById('points');
+      const pts = Math.min(Math.max(parseInt(pointsInput.value, 10) || 0, 0), max);
+      pointsInput.value = pts;
+      document.getElementById('s-items').textContent = won(sum);
+      document.getElementById('s-coupon').textContent = disc ? `-${won(disc)}` : '0원';
+      document.getElementById('s-ship').textContent = ship ? won(ship) : '무료';
+      document.getElementById('s-points').textContent = pts ? `-${won(pts)}` : '0원';
+      document.getElementById('s-total').textContent = won(sum - disc + ship - pts);
+      return { pts, max };
+    }
+
+    function renderMethods() {
+      document.getElementById('methods').replaceChildren(...Object.entries(METHODS).map(([k, v]) =>
+        el('button', { type: 'button', class: `chip${k === method ? ' on' : ''}`, onclick: () => { method = k; renderMethods(); } }, v)));
+    }
+
+    (async () => {
+      if (ids.length === 0) { location.href = '/cart.html'; return; }
+      const [cart, addresses, myCoupons, profile] = await Promise.all([
+        api('/cart'),
+        api(`/members/${s.userId}/addresses`),
+        api(`/profiles/${s.userId}/coupons`),
+        api(`/profiles/${s.userId}`),
+      ]);
+      items = cart.filter((it) => ids.includes(it.id));
+      myPoints = profile.points;
+      coupons = myCoupons.filter((c) => !c.used_at && new Date(c.expires_at) > new Date());
+
+      document.getElementById('addresses').append(...addresses.map((a) => el('label', {},
+        el('input', { type: 'radio', name: 'addr', value: a.id, checked: a.is_default }),
+        el('div', {},
+          el('b', {}, `${a.label ?? '배송지'} `), a.is_default ? el('span', { class: 'tag' }, '기본') : null,
+          el('div', { class: 'muted' }, `${a.recipient_name} · ${a.recipient_phone}`),
+          el('div', { class: 'small' }, `(${a.zipcode}) ${a.address1} ${a.address2 ?? ''}`)))));
+      if (!document.querySelector('input[name=addr]:checked')) document.querySelector('input[name=addr]')?.click();
+
+      document.getElementById('item-count').textContent = `${items.length}개`;
+      document.getElementById('items').append(...items.map((it) => el('div', { class: 'line-item' },
+        el('div', { class: 'thumb' }, el('img', { src: imgSrc(it.image), alt: '' })),
+        el('div', { class: 'grow' }, el('div', { class: 'small' }, it.brand), it.name, el('div', { class: 'small' }, `수량 ${it.quantity}개`)),
+        el('b', {}, won(it.final_price * it.quantity)))));
+
+      const sel = document.getElementById('coupon');
+      for (const c of coupons) {
+        const label = c.discount_type === 'percent' ? `${c.discount_value}%` : won(c.discount_value);
+        sel.append(el('option', { value: c.id, disabled: subtotal() < c.min_order_amount },
+          `${c.name} (${label} 할인${c.min_order_amount ? ` · ${won(c.min_order_amount)} 이상` : ''})`));
+      }
+      document.getElementById('points-label').textContent = `적립금 (보유 ${won(myPoints)})`;
+      sel.onchange = calc;
+      document.getElementById('points').onchange = calc;
+      document.getElementById('points-all').onclick = () => { document.getElementById('points').value = calc().max; calc(); };
+      renderMethods();
+      calc();
+    })().catch((ex) => showError(ex));
+
+    document.getElementById('pay').onclick = async (e) => {
+      const error = document.getElementById('error');
+      error.hidden = true;
+      if (!document.getElementById('agree').checked) { toast('결제 동의에 체크해 주세요.'); return; }
+      const addr = document.querySelector('input[name=addr]:checked');
+      if (!addr) { toast('배송지를 선택해 주세요.'); return; }
+      e.target.disabled = true;
+      try {
+        const coupon = document.getElementById('coupon').value;
+        const order = await api('/orders', {
+          method: 'POST',
+          body: {
+            cartItemIds: items.map((it) => it.id),
+            addressId: Number(addr.value),
+            couponId: coupon ? Number(coupon) : undefined,
+            pointsUsed: calc().pts,
+            method,
+            memo: document.getElementById('memo').value || undefined,
+          },
+        });
+        location.href = `/order.html?id=${order.id}&done=1`;
+      } catch (ex) {
+        showError(ex);
+        e.target.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>

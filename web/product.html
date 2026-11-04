@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>상품 상세 | BOLA Shop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page wrap">
+    <p id="error" class="alert" hidden></p>
+    <section class="detail" id="detail" hidden>
+      <div class="thumb"><img id="img" alt=""></div>
+      <div>
+        <div class="small" id="crumb"></div>
+        <div class="muted" id="brand"></div>
+        <h1 id="name"></h1>
+        <div class="stars" id="rating"></div>
+        <div id="price"></div>
+        <div class="info-rows">
+          <div><span class="k">배송</span><span>무료배송 (5만 원 미만 3,000원) · 오늘 주문 시 내일 도착 예정</span></div>
+          <div><span class="k">적립</span><span id="earn"></span></div>
+          <div><span class="k">재고</span><span id="stock"></span></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span class="muted">수량</span>
+          <div class="qty">
+            <button type="button" id="minus" aria-label="수량 줄이기">−</button>
+            <input type="number" id="qty" value="1" min="1" max="99" aria-label="수량">
+            <button type="button" id="plus" aria-label="수량 늘리기">+</button>
+          </div>
+        </div>
+        <div class="total-row"><span class="muted">총 상품 금액</span><b id="total"></b></div>
+        <div class="actions">
+          <button class="btn" id="add-cart" type="button">장바구니 담기</button>
+          <button class="btn dark" id="buy-now" type="button">바로 구매</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="section-title"><h2>상품 설명</h2></div>
+    <div class="panel"><p id="desc" style="margin:0"></p></div>
+
+    <div class="section-title"><h2 id="review-title">리뷰</h2></div>
+    <div class="panel" id="reviews"></div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    const id = params.get('id');
+    const qtyInput = document.getElementById('qty');
+    let product;
+
+    const qty = () => Math.min(Math.max(parseInt(qtyInput.value, 10) || 1, 1), 99);
+    const updateTotal = () => {
+      qtyInput.value = qty();
+      document.getElementById('total').textContent = won(product.final_price * qty());
+    };
+    document.getElementById('minus').onclick = () => { qtyInput.value = qty() - 1; updateTotal(); };
+    document.getElementById('plus').onclick = () => { qtyInput.value = qty() + 1; updateTotal(); };
+    qtyInput.onchange = updateTotal;
+
+    async function addToCart() {
+      if (!session.get()) { location.href = loginUrl(); return null; }
+      return api('/cart/items', { method: 'POST', body: { productId: product.id, quantity: qty() } });
+    }
+    document.getElementById('add-cart').onclick = async () => {
+      try {
+        if (await addToCart()) { toast('장바구니에 담았어요.'); updateCartCount(); }
+      } catch (ex) { toast(errorText(ex)); }
+    };
+    document.getElementById('buy-now').onclick = async () => {
+      try {
+        const item = await addToCart();
+        if (item) location.href = `/checkout.html?items=${item.id}`;
+      } catch (ex) { toast(errorText(ex)); }
+    };
+
+    (async () => {
+      const [p, reviews] = await Promise.all([pub(`/products/${encodeURIComponent(id)}`), pub(`/products/${encodeURIComponent(id)}/reviews`)]);
+      product = p;
+      document.title = `${p.name} | BOLA Shop`;
+      document.getElementById('img').src = imgSrc(p.image);
+      document.getElementById('crumb').textContent = `홈 > ${p.category_name}`;
+      document.getElementById('brand').textContent = p.brand;
+      document.getElementById('name').textContent = p.name;
+      document.getElementById('rating').textContent = p.review_count ? `${stars(p.avg_rating)} ${p.avg_rating} · 리뷰 ${p.review_count}개` : '아직 리뷰가 없어요';
+      document.getElementById('price').append(priceEl(p));
+      document.getElementById('earn').textContent = `${Math.floor(p.final_price * 0.01).toLocaleString()}원 (1%) · 배송 완료 후 지급`;
+      document.getElementById('stock').textContent = p.stock > 0 ? `${p.stock}개 남음` : '품절';
+      document.getElementById('desc').textContent = p.description;
+      document.getElementById('add-cart').disabled = document.getElementById('buy-now').disabled = p.stock === 0;
+      updateTotal();
+      document.getElementById('detail').hidden = false;
+
+      document.getElementById('review-title').textContent = `리뷰 ${reviews.length}개`;
+      const box = document.getElementById('reviews');
+      if (reviews.length === 0) box.append(el('div', { class: 'empty', style: 'padding:24px 0' }, '첫 리뷰를 남겨 주세요. 구매한 상품은 마이페이지에서 리뷰를 쓸 수 있어요.'));
+      for (const r of reviews) {
+        box.append(el('div', { class: 'review' },
+          el('div', { class: 'top' }, el('b', {}, stars(r.rating)), r.writer, el('span', { class: 'small' }, fmtDate(r.created_at))),
+          el('p', {}, r.content)));
+      }
+    })().catch((ex) => showError(ex));
+  </script>
+</body>
+</html>

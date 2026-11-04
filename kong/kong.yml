@@ -1,0 +1,258 @@
+_format_version: "3.0"
+
+services:
+  - name: auth-service
+    url: http://auth:3000
+    routes:
+      - name: auth-route
+        paths: [/auth]
+        strip_path: false        # /auth/login 그대로 전달
+    # jwt 플러그인 없음 (로그인은 토큰 없이 호출)
+
+  - name: members-service
+    url: http://members:3000
+    routes:
+      - name: members-route
+        paths: [/members]
+        strip_path: false
+    plugins:
+      - name: jwt
+        config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+  - name: profiles-service
+    url: http://profiles:3000
+    routes:
+      - name: profiles-route
+        paths: [/profiles]
+        strip_path: false
+    plugins:
+      - name: jwt
+        config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+  - name: orders-service
+    url: http://orders:3000
+    routes:
+      - name: orders-route
+        paths: [/orders]
+        strip_path: false
+    plugins:
+      - name: jwt
+        config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+  - name: payments-service
+    url: http://payments:3000
+    routes:
+      - name: payments-route
+        paths: [/payments]
+        strip_path: false
+    plugins:
+      - name: jwt
+        config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+  - name: catalog-service
+    url: http://catalog:3000
+    routes:
+      # 상품·카테고리 조회는 로그인 없이 (JWT 없음 → 로그에 user_id가 없어 학습·탐지에서 빠짐)
+      - name: catalog-route
+        paths: [/products, /categories]
+        strip_path: false
+      # 리뷰 작성·수정·삭제는 로그인 필요
+      - name: reviews-route
+        paths: [/reviews]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+  - name: cart-service
+    url: http://cart:3000
+    routes:
+      - name: cart-route
+        paths: [/cart]
+        strip_path: false
+    plugins:
+      - name: jwt
+        config: { key_claim_name: iss, claims_to_verify: [exp] }
+
+consumers:
+  # 사용자별 consumer가 아니라 "우리 인증 서버" 발급자 하나만 등록
+  # 실제 사용자 구분은 토큰의 sub로 함
+  - username: bola-auth-issuer
+    jwt_secrets:
+      - key: bola-auth            # 토큰의 iss 값과 일치해야 함
+        algorithm: RS256
+        rsa_public_key: |
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxPch92i9a2Lf5ninJ7et
+          k/5rT4WVqWEqAkKJAFWEdX7zvUl3ZakPUKZmUinj1HasaM+cvPwlZIoYOdTT2XO1
+          SogB75iGCu5doPYSvqh9L18E3ZT9XO7rFnKNglDWW+0oPQo/eQs03nvF1mZGV9Sa
+          /46ghaLOk31vCcVr69zK/kKWH2TqO/oM6yStIH0unEUxDlQ3gpHNvUoOi8E29D1U
+          tx6SpcnnvolhWFO1JtHA92fXPixLAF+Q2CSWUca084IMQLly2vvygZ2kduORmhFU
+          p6mVIcHJGE7IcJDqvLi4BLZpMSNUm5Mq70GSjv1FNAjy23VyDgPZhYHvTkqj7Pno
+          3wIDAQAB
+          -----END PUBLIC KEY-----
+
+plugins:
+  # 요청마다 X-Request-ID 부여 → API 서버까지 전달 → 로그를 서로 연결하는 키
+  - name: correlation-id
+    config:
+      header_name: X-Request-ID
+      generator: uuid
+      echo_downstream: true
+    # jwt 플러그인보다 나중에 실행됨 → 검증된 토큰만 다룸
+    
+  - name: file-log
+    config:
+      path: /logs/kong/access.json
+      reopen: true
+      custom_fields_by_lua:
+        # ---- 필요한 값만 짧은 이름으로 새로 기록 ----
+        time: 'local ms = kong.request.get_start_time() return os.date("!%Y-%m-%dT%H:%M:%S", math.floor(ms / 1000) + 9 * 3600) .. string.format(".%03d+09:00", ms % 1000)'   # 한국 시간
+        request_id: return kong.request.get_header("X-Request-ID")
+        method: return kong.request.get_method()
+        uri: return kong.request.get_path_with_query()
+        status: return kong.response.get_status()
+        api: local s = kong.router.get_service() return s and s.name
+        latency_ms: return math.floor((ngx.now() - ngx.req.start_time()) * 1000)
+        # ---- Kong 기본 필드 중 안 쓰는 것은 삭제 (nil = 삭제) ----
+        request: return nil
+        response: return nil
+        route: return nil
+        service: return nil
+        latencies: return nil
+        tries: return nil
+        upstream_uri: return nil
+        upstream_status: return nil
+        workspace: return nil
+        workspace_name: return nil
+        correlation_id: return nil
+        source: return nil
+        consumer: return nil
+        authenticated_entity: return nil
+    
+  - name: post-function
+    config:
+      access:
+        - |
+          local token = kong.ctx.shared.authenticated_jwt_token
+          if not token then return end
+
+          local jwt = require("kong.plugins.jwt.jwt_parser"):new(token)
+          local user_id = jwt and jwt.claims and jwt.claims.sub
+          if not user_id then return end
+
+          -- 학습·탐지용: 누가, 어떤 권한으로 요청했나 (토큰 원문은 로그에서 가림)
+          kong.log.set_serialize_value("user_id", user_id)
+          kong.log.set_serialize_value("role", jwt.claims.role or "unknown")
+          kong.log.set_serialize_value("request.headers.authorization", "REDACTED")
+
+          local redis = require("resty.redis")
+          local red = redis:new()
+          red:set_timeouts(200, 200, 200)
+          local ok, err = red:connect("redis", 6379)
+          if not ok then
+            kong.log.err("redis connect failed: ", err)
+            return
+          end
+          if red:get_reused_times() == 0 then          -- 새로 연 연결만 로그인
+            local authed, aerr = red:auth("redis6379")
+            if not authed then
+              kong.log.err("redis auth failed: ", aerr)
+              return
+            end
+          end
+          if not ok then
+            kong.log.err("redis connect failed: ", err)
+            return
+          end
+
+                    local blocked = red:get("blocked:user:" .. user_id)
+          if blocked and blocked ~= ngx.null then
+            red:set_keepalive(10000, 100)
+            kong.log.set_serialize_value("blocked", true)
+            return kong.response.exit(403, { message = "blocked by security policy" })
+          end
+
+          -- 초당 요청 제한: 같은 사용자가 1초에 30번 넘게 요청하면 429 + 1분 임시 차단
+          local rl_key = "rl:user:" .. user_id .. ":" .. ngx.time()
+          local count = red:incr(rl_key)
+          if count == 1 then
+            red:expire(rl_key, 2)
+          end
+          if type(count) == "number" and count > 30 then
+            red:set("blocked:user:" .. user_id, "flood", "EX", 60)
+            red:set_keepalive(10000, 100)
+            kong.log.set_serialize_value("blocked", true)
+            return kong.response.exit(429, { message = "too many requests" })
+          end
+          red:set_keepalive(10000, 100)
+      body_filter:
+        - |
+          -- 응답 JSON에서 "ID처럼 생긴 필드"를 경로째 전부 추출 (어떤 필드가 주인인지는 엔진이 학습)
+          if not kong.ctx.shared.authenticated_jwt_token then return end
+          local status = kong.response.get_status()
+          if status ~= 200 and status ~= 201 then return end   -- 201: 방금 만든 객체(새 주문 등)의 id도 기록
+          local ct = kong.response.get_header("Content-Type") or ""
+          if not ct:find("application/json", 1, true) then return end
+          if kong.response.get_header("Content-Encoding") then return end   -- gzip 등 압축 응답은 건너뜀
+
+          -- 응답은 조각(chunk)으로 흘러가므로 복사만 해서 모음 (ngx.arg[1]은 건드리지 않음)
+          local ctx = ngx.ctx
+          if ctx.bola_skip then return end
+          local chunk, eof = ngx.arg[1], ngx.arg[2]
+          ctx.bola_buf = (ctx.bola_buf or "") .. (chunk or "")
+          if #ctx.bola_buf > 65536 then
+            ctx.bola_skip = true
+            ctx.bola_buf = nil
+            return
+          end
+          if not eof then return end
+
+          local body = ctx.bola_buf
+          ctx.bola_buf = nil
+
+          -- 추출 중 에러가 나도 사용자 응답에는 영향이 없도록 pcall로 감쌈
+          local ok, err = pcall(function()
+            local data = require("cjson.safe").decode(body)
+            if type(data) ~= "table" then return end
+
+            -- id, user_id, orderId, member_no 같은 키만 (이름·전화번호 등 개인정보는 제외)
+            local function is_id_key(k)
+              local l = k:lower()
+              return l == "id" or l:match("_id$") or k:match("%lId$") or l:match("_no$")
+            end
+
+            local out, seen, count = {}, {}, 0
+            local function walk(v, path, depth)
+              if type(v) ~= "table" or depth > 4 or count >= 50 then return end
+              if v[1] ~= nil then                                  -- 배열
+                for i = 1, math.min(#v, 20) do walk(v[i], path .. "[]", depth + 1) end
+                return
+              end
+              for k, val in pairs(v) do
+                if type(k) == "string" then
+                  local p = (path == "") and k or (path .. "." .. k)
+                  local tv = type(val)
+                  if tv == "table" then
+                    walk(val, p, depth + 1)
+                  elseif (tv == "number" or (tv == "string" and #val <= 64)) and is_id_key(k) then
+                    local s = tostring(val)
+                    if not seen[p .. "\0" .. s] then
+                      seen[p .. "\0" .. s] = true
+                      out[p] = out[p] or {}
+                      table.insert(out[p], s)
+                      count = count + 1
+                    end
+                  end
+                end
+              end
+            end
+            walk(data, "", 0)
+
+            if count > 0 then
+              kong.log.set_serialize_value("resp_ids", out)
+            end
+          end)
+          if not ok then
+            kong.log.warn("resp_ids extract failed: ", err)
+          end

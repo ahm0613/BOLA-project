@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>마이페이지 | BOLA Shop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page wrap">
+    <div class="my">
+      <aside class="my-side">
+        <div class="who"><b id="who-name"></b><div class="small" id="who-grade"></div></div>
+        <nav id="tabs"></nav>
+      </aside>
+      <section>
+        <div class="stats">
+          <div class="stat"><div class="k">회원 등급</div><div class="v" id="st-grade">-</div></div>
+          <div class="stat"><div class="k">적립금</div><div class="v" id="st-points">-</div></div>
+          <div class="stat"><div class="k">쿠폰</div><div class="v" id="st-coupons">-</div></div>
+          <div class="stat"><div class="k">배송 중</div><div class="v" id="st-shipping">-</div></div>
+        </div>
+        <div class="panel">
+          <h2 id="tab-title" style="margin-bottom:12px"></h2>
+          <p id="error" class="alert" hidden></p>
+          <div id="content"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    const s = requireLogin();
+    const TABS = {
+      orders: '주문 · 배송 조회', payments: '결제 내역', coupons: '쿠폰', points: '적립금',
+      addresses: '배송지 관리', reviews: '리뷰', info: '회원정보',
+    };
+    const tab = TABS[params.get('tab')] ? params.get('tab') : 'orders';
+    const content = document.getElementById('content');
+    document.getElementById('tabs').append(...Object.entries(TABS).map(([k, v]) =>
+      el('a', { href: `/mypage.html?tab=${k}`, class: k === tab ? 'on' : null }, v)));
+    document.getElementById('tab-title').textContent = TABS[tab];
+
+    const emptyBox = (msg) => el('div', { class: 'empty' }, msg);
+
+    // ---------------------------------------------------------------- 주문 · 배송
+    async function renderOrders() {
+      const orders = await api('/orders');
+      if (orders.length === 0) return content.append(emptyBox('아직 주문한 상품이 없어요.'));
+      content.append(...orders.map((o) => el('a', { class: 'line-item', href: `/order.html?id=${o.id}` },
+        el('div', { class: 'thumb' }, el('img', { src: imgSrc(o.image), alt: '' })),
+        el('div', { class: 'grow' },
+          el('div', { class: 'small' }, `${fmtDate(o.created_at)} · ${o.order_number}`),
+          el('div', {}, o.item_count > 1 ? `${o.first_item} 외 ${o.item_count - 1}건` : o.first_item),
+          el('b', {}, won(o.final_amount))),
+        el('span', { class: o.status === 'shipped' ? 'tag dark' : 'tag' }, ORDER_STATUS[o.status] ?? o.status))));
+    }
+
+    // ---------------------------------------------------------------- 결제 내역
+    async function renderPayments() {
+      const pays = await api('/payments');
+      if (pays.length === 0) return content.append(emptyBox('결제 내역이 없어요.'));
+      content.append(el('table', { class: 'table' },
+        el('thead', {}, el('tr', {}, ['결제일', '결제 수단', '금액', '상태', ''].map((h) => el('th', {}, h)))),
+        el('tbody', {}, pays.map((p) => el('tr', {},
+          el('td', {}, fmtDate(p.paid_at)),
+          el('td', {}, PAY_METHOD[p.method] ?? p.method),
+          el('td', {}, won(p.amount)),
+          el('td', {}, PAY_STATUS[p.status] ?? p.status),
+          el('td', {}, el('a', { class: 'btn sm', href: `/order.html?id=${p.order_id}` }, '주문 보기')))))));
+    }
+
+    // ---------------------------------------------------------------- 쿠폰
+    async function renderCoupons() {
+      const coupons = await api(`/profiles/${s.userId}/coupons`);
+      if (coupons.length === 0) return content.append(emptyBox('보유한 쿠폰이 없어요.'));
+      content.append(...coupons.map((c) => {
+        const expired = new Date(c.expires_at) < new Date();
+        const state = c.used_at ? '사용 완료' : expired ? '기간 만료' : '사용 가능';
+        return el('div', { class: 'line-item' },
+          el('div', { class: 'grow' },
+            el('b', {}, c.discount_type === 'percent' ? `${c.discount_value}% 할인` : `${won(c.discount_value)} 할인`),
+            el('div', {}, c.name),
+            el('div', { class: 'small' }, `${c.min_order_amount ? `${won(c.min_order_amount)} 이상 구매 시 · ` : ''}${fmtDate(c.expires_at)}까지`)),
+          el('span', { class: state === '사용 가능' ? 'tag dark' : 'tag' }, state));
+      }));
+    }
+
+    // ---------------------------------------------------------------- 적립금
+    async function renderPoints() {
+      const [p, pays] = await Promise.all([api(`/profiles/${s.userId}`), api('/payments')]);
+      content.append(el('div', { class: 'alert' }, `사용 가능한 적립금은 ${won(p.points)}이에요. 구매 금액의 1%가 배송 완료 후 적립돼요.`));
+      const used = pays.filter((x) => x.points_used > 0);
+      if (used.length === 0) return content.append(emptyBox('적립금 사용 내역이 없어요.'));
+      content.append(el('table', { class: 'table' },
+        el('thead', {}, el('tr', {}, ['날짜', '내용', '금액'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, used.map((x) => el('tr', {}, el('td', {}, fmtDate(x.paid_at)), el('td', {}, '주문 결제 사용'), el('td', {}, `-${won(x.points_used)}`))))));
+    }
+
+    // ---------------------------------------------------------------- 배송지
+    async function renderAddresses() {
+      const list = await api(`/members/${s.userId}/addresses`);
+      if (list.length === 0) return content.append(emptyBox('등록된 배송지가 없어요.'));
+      content.append(...list.map((a) => el('div', { class: 'line-item' },
+        el('div', { class: 'grow' },
+          el('b', {}, `${a.label ?? '배송지'} `), a.is_default ? el('span', { class: 'tag' }, '기본 배송지') : null,
+          el('div', {}, `${a.recipient_name} · ${a.recipient_phone}`),
+          el('div', { class: 'small' }, `(${a.zipcode}) ${a.address1} ${a.address2 ?? ''}`)))));
+    }
+
+    // ---------------------------------------------------------------- 리뷰
+    function reviewForm({ rating = 5, content: text = '' }, onSubmit, onCancel) {
+      let value = rating;
+      const starsBox = el('div', { class: 'stars-input' });
+      const drawStars = () => starsBox.replaceChildren(...[1, 2, 3, 4, 5].map((n) =>
+        el('button', { type: 'button', class: n <= value ? 'on' : null, 'aria-label': `${n}점`, onclick: () => { value = n; drawStars(); } }, '★')));
+      drawStars();
+      const area = el('textarea', { rows: 3, placeholder: '상품은 어떠셨나요? 5자 이상 남겨 주세요.' });
+      area.value = text;
+      return el('form', { style: 'margin-top:10px', onsubmit: (e) => { e.preventDefault(); onSubmit(value, area.value); } },
+        starsBox, area,
+        el('div', { style: 'display:flex;gap:8px;margin-top:8px' },
+          el('button', { class: 'btn sm dark', type: 'submit' }, '등록'),
+          onCancel ? el('button', { class: 'btn sm', type: 'button', onclick: onCancel }, '취소') : null));
+    }
+
+    async function renderReviews() {
+      const [writable, mine] = await Promise.all([api('/reviews/writable'), api('/reviews/me')]);
+      content.append(el('h3', { style: 'margin:4px 0 6px' }, `작성 가능한 리뷰 ${writable.length}개`));
+      if (writable.length === 0) content.append(el('div', { class: 'small', style: 'margin-bottom:20px' }, '배송 완료된 상품에 리뷰를 남길 수 있어요.'));
+      for (const w of writable) {
+        const row = el('div', { class: 'line-item', style: 'flex-wrap:wrap' },
+          el('div', { class: 'thumb' }, el('img', { src: imgSrc(w.image), alt: '' })),
+          el('div', { class: 'grow' }, el('div', { class: 'small' }, w.order_number), w.product_name));
+        const formBox = el('div', { style: 'flex-basis:100%' });
+        row.append(el('button', { class: 'btn sm', onclick: () => {
+          formBox.replaceChildren(reviewForm({}, async (rating, text) => {
+            try {
+              await api('/reviews', { method: 'POST', body: { orderId: w.order_id, productId: w.product_id, rating, content: text } });
+              toast('리뷰를 등록했어요.');
+              reload();
+            } catch (ex) { toast(errorText(ex)); }
+          }, () => formBox.replaceChildren()));
+        } }, '리뷰 쓰기'), formBox);
+        content.append(row);
+      }
+
+      content.append(el('h3', { style: 'margin:24px 0 6px' }, `내가 쓴 리뷰 ${mine.length}개`));
+      for (const r of mine) {
+        const body = el('div', {}, el('div', { class: 'top' }, el('b', {}, stars(r.rating)), el('span', { class: 'small' }, fmtDate(r.created_at))), el('p', {}, r.content));
+        const box = el('div', { class: 'review' },
+          el('a', { href: `/product.html?id=${r.product_id}`, class: 'muted' }, r.product_name), body,
+          el('div', { style: 'display:flex;gap:8px;margin-top:8px' },
+            el('button', { class: 'btn sm', onclick: () => body.replaceChildren(reviewForm(r, async (rating, text) => {
+              try {
+                await api(`/reviews/${r.id}`, { method: 'PATCH', body: { rating, content: text } });
+                toast('리뷰를 수정했어요.');
+                reload();
+              } catch (ex) { toast(errorText(ex)); }
+            }, reload)) }, '수정'),
+            el('button', { class: 'btn sm', onclick: async () => {
+              if (!confirm('리뷰를 삭제할까요?')) return;
+              try {
+                await api(`/reviews/${r.id}`, { method: 'DELETE' });
+                toast('리뷰를 삭제했어요.');
+                reload();
+              } catch (ex) { toast(errorText(ex)); }
+            } }, '삭제')));
+        content.append(box);
+      }
+    }
+
+    // ---------------------------------------------------------------- 회원정보
+    async function renderInfo() {
+      const m = await api(`/members/${s.userId}`);
+      const phone = el('input', { type: 'text', value: m.phone });
+      const email = el('input', { type: 'email', value: m.email });
+      content.append(
+        el('dl', { class: 'kv', style: 'margin-bottom:20px' },
+          el('dt', {}, '아이디'), el('dd', {}, m.username),
+          el('dt', {}, '이름'), el('dd', {}, m.name),
+          el('dt', {}, '생년월일'), el('dd', {}, m.birth_date ? fmtDate(m.birth_date) : '-')),
+        el('form', { style: 'max-width:420px', onsubmit: async (e) => {
+          e.preventDefault();
+          try {
+            await api(`/members/${s.userId}`, { method: 'PATCH', body: { phone: phone.value.trim(), email: email.value.trim() } });
+            toast('회원정보를 저장했어요.');
+          } catch (ex) { toast(errorText(ex)); }
+        } },
+          el('label', { class: 'field' }, el('span', {}, '휴대폰 번호'), phone),
+          el('label', { class: 'field' }, el('span', {}, '이메일'), email),
+          el('button', { class: 'btn dark', type: 'submit' }, '저장')));
+    }
+
+    const RENDER = {
+      orders: renderOrders, payments: renderPayments, coupons: renderCoupons, points: renderPoints,
+      addresses: renderAddresses, reviews: renderReviews, info: renderInfo,
+    };
+
+    async function reload() {
+      content.replaceChildren();
+      try { await RENDER[tab](); } catch (ex) { showError(ex); }
+    }
+
+    (async () => {
+      const [p, orders] = await Promise.all([api(`/profiles/${s.userId}`), api('/orders')]);
+      document.getElementById('who-name').textContent = `${p.name}님`;
+      document.getElementById('who-grade').textContent = `${p.grade} 회원`;
+      document.getElementById('st-grade').textContent = p.grade;
+      document.getElementById('st-points').textContent = won(p.points);
+      document.getElementById('st-coupons').textContent = `${p.coupon_count}장`;
+      document.getElementById('st-shipping').textContent = `${orders.filter((o) => ['paid', 'preparing', 'shipped'].includes(o.status)).length}건`;
+    })().catch((ex) => showError(ex));
+    reload();
+  </script>
+</body>
+</html>
