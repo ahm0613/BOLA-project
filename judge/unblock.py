@@ -18,6 +18,7 @@
   3. output/confirmed_log.jsonl: 누가·언제·왜 해제했는지 한 줄
   4. DB(있으면): 그 사용자의 확정 조치(AC-…-L) → enforcement_status = released, released_at = 지금
                  user_status → normal
+  5. Slack 관리자 채널(SLACK_ADMIN_WEBHOOK이 있으면): 누가·누구를·왜 해제했는지 한 줄
 """
 import argparse
 import os
@@ -28,6 +29,7 @@ import redis
 
 import db
 import judge
+import notifier
 from blocker import INFO, KEY, Blocker
 from store import ConfirmedStore
 
@@ -113,6 +115,8 @@ def main():
         print(f"[파일] confirmed.json 확정 명단에 사용자 {uid}가 없음 (Redis 키만 지움)")
 
     update_db(uid)
+    notifier.send_tool_alert(cfg, "release", f"[차단 해제] 사용자 {uid} | 관리자 {args.by}: {args.note}\n"
+                                             f"Redis 차단 키 {removed}개 삭제, 해제 이전 이벤트로는 다시 확정하지 않음")
     print("완료. 판단 서버를 다시 켜세요: docker compose start judge")
 
 

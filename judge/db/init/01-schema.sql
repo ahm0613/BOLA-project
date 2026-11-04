@@ -48,3 +48,19 @@ CREATE TABLE user_status (
   last_event_at          TIMESTAMPTZ,          -- 마지막 의심 요청 시각
   last_stream_id         TEXT                  -- 마지막 이벤트 (bola_events.stream_id)
 );
+
+-- Slack 알림 기록 (notifier.py): 같은 alert_key는 한 번만 보냄. 이미 쓰는 DB에는 db/migrate/03-alerts.sql로 추가
+CREATE TABLE alerts (
+  alert_key              TEXT PRIMARY KEY,     -- 중복 방지 키 (예: user:7:warning:r0, rate:7:2026-11-03, api:GET /orders/{id}:<ms>)
+  channel                TEXT NOT NULL,        -- admin / dev
+  kind                   TEXT NOT NULL,        -- warning / attack / rate / api / summary / release / import / test
+  user_id                TEXT,                 -- 관리자 알림의 사용자 (개발자 알림은 NULL)
+  api_path               TEXT,                 -- 개발자 알림의 API
+  message                TEXT NOT NULL,        -- 보낸 글
+  status                 TEXT NOT NULL,        -- pending / sent / failed / skipped(웹훅 주소 없음)
+  attempts               INT NOT NULL DEFAULT 0,
+  created_at             TIMESTAMPTZ NOT NULL,
+  sent_at                TIMESTAMPTZ,
+  last_error             TEXT
+);
+CREATE INDEX ON alerts (created_at DESC);

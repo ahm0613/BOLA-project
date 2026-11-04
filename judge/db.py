@@ -9,6 +9,7 @@
 이벤트는 stream_id가 같으면 한 번만 들어가므로, 판단 서버를 다시 시작해 과거 이벤트를 다시 읽어도 중복되지 않는다.
 """
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -43,6 +44,16 @@ ON CONFLICT (user_id) DO UPDATE SET
 SQL_SWEEP = """
 UPDATE bola_events SET enforcement_status = 'expired', released_at = expires_at
 WHERE enforcement_status = 'applied' AND expires_at IS NOT NULL AND expires_at < now()"""
+
+
+def dsn_from_env():
+    """.env의 PG_*로 psycopg 접속 문자열. psycopg가 없거나 PG_JUDGE_PASSWORD가 없으면 None"""
+    if psycopg is None or not os.getenv("PG_JUDGE_PASSWORD"):
+        return None
+    return psycopg.conninfo.make_conninfo(
+        host=os.getenv("PG_HOST", "127.0.0.1"), port=os.getenv("PG_PORT", "5432"),
+        dbname=os.getenv("PG_DB", "bola_judge"), user=os.getenv("PG_JUDGE_USER", "judge"),
+        password=os.getenv("PG_JUDGE_PASSWORD"))
 
 
 class DbWriter:

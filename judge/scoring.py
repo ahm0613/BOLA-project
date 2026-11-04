@@ -6,7 +6,11 @@
 점수 (최근 window_sec 동안, config.json에서 조정)
   BOLA_PATH    /members/{id} 처럼 URL 숫자가 곧 사용자 번호인 API에서 남의 번호 → 확실
   BOLA_LEDGER  그 밖의 BOLA (realtime.py 장부 근거, 장부가 틀릴 수 있음)
+  *_WRITE      위 BOLA를 PUT/PATCH/DELETE(남의 객체 수정·삭제)로 한 경우 → 조회보다 위험하므로 더 높은 점수
+               (BOLA_PATH_WRITE, BOLA_LEDGER_WRITE). 메서드는 이벤트의 api("PATCH /members/{id}")에서 읽음
   ATTEMPT / UNKNOWN / RATE  realtime.py의 kind 그대로
+  단, path_owners API(/members/{id} 등)에서 장부에 없어 UNKNOWN으로 온 성공(200/204) 요청은
+  URL 번호로 주인을 알 수 있으므로 BOLA_PATH로 올림
   보너스: 서로 다른 피해자 여러 명, ATTEMPT 뒤 BOLA 성공, 여러 자원 종류(members·orders…)에서 BOLA
 
 오탐 거르기: URL 숫자가 요청자 본인인 BOLA·ATTEMPT는 점수를 주지 않음 (장부 오염으로 잘못 보고된 경우)
@@ -16,11 +20,20 @@ from collections import deque
 
 NUM = re.compile(r"^\d+$")
 OWNER_IN_DETAIL = re.compile(r"주인 (\d+)")
+WRITE_METHODS = {"PUT", "PATCH", "DELETE"}             # 남의 객체에 쓰기(수정·삭제) = 조회보다 위험
+SUCCESS = (200, 204)                                    # realtime.py와 같음: 데이터를 받아 가거나 지운 요청
 
 
 def sort_ids(ids):
     """ID 목록을 숫자 순으로 정렬 (숫자가 아닌 값은 뒤로). {"24", "3"} → ["3", "24"]"""
     return sorted(ids, key=lambda v: (0, int(v), "") if str(v).isdigit() else (1, 0, str(v)))
+
+
+def object_id(uri):
+    """URL의 객체 번호. /orders/99 → "99", /members/4/addresses/5 → "4/5". 번호가 없으면 None
+    "털린 API"에 주인(피해자)이 아니라 실제로 접근한 객체 번호를 보여 주기 위해 씀"""
+    ids = re.findall(r"/(\d+)(?=/|$)", uri.split("?")[0])
+    return "/".join(ids) if ids else None
 
 
 def parse_event(fields, stream_id=None):
@@ -68,10 +81,11 @@ class Judge:
         self.threshold = cfg["threshold"]
         self.points = cfg["points"]
         self.bonus = cfg["bonus"]
-        self.path_owners = [[s for s in t.split("/") if s] for t in cfg.get("path_owners") or []]
+        po = cfg.get("path_owners")
+        self.set_path_owners(po if isinstance(po, list) else [])   # "auto"면 판단 서버가 장부로 추론해 나중에 넣음
         self.recent = {}                                # user_id → deque[채점된 이벤트]
         self.last = {}                                  # 마지막으로 처리한 이벤트의 채점 결과 (점수 로그용)
-        self.hits = {}                                  # 털린 API: user_id → {"GET /members/{id}/addresses": {피해자}}
+        self.hits = {}                                  # 털린 API: user_id → {"GET /members/{id}/addresses": {털린 객체 번호}}
         # 단계: 점수가 낮은 순으로 (이름, 기준). 마지막 attack은 threshold와 같음 (확정)
         levels = cfg.get("levels") or {"watch": 30, "warning": 60}
         self.levels = sorted(levels.items(), key=lambda x: x[1]) + [("attack", self.threshold)]
@@ -80,6 +94,11 @@ class Judge:
         self.confirmed = set(confirmed_users or [])
         self.released = {str(u): int(ms) for u, ms in (released or {}).items()}
         self.counts = {"events": 0, "scored": 0, "self_skip": 0, "hits": 0}
+
+    def set_path_owners(self, templates):
+        """URL 번호 = 사용자 번호인 경로 목록을 바꿈. ["/members/{id}", ...] (수동 설정 또는 api_infer.py 추론 결과)"""
+        self.path_owner_list = list(templates)
+        self.path_owners = [[s for s in t.split("/") if s] for t in self.path_owner_list]
 
     def path_owner(self, uri):
         """URL이 path_owners 모양이면 그 안의 사용자 번호, 아니면 None. /members/3/addresses → "3" """
@@ -93,12 +112,15 @@ class Judge:
         """이벤트 → (점수 항목, 피해자) . 점수를 주지 않을 이벤트면 (None, None)"""
         kind, me = e["kind"], e["user_id"]
         path_owner = self.path_owner(e["uri"])
-        if kind in ("BOLA", "ATTEMPT") and path_owner == me:
-            return None, None                           # 본인 번호 → 장부 오염 등으로 잘못 보고된 것
+        if kind in ("BOLA", "ATTEMPT", "UNKNOWN") and path_owner == me:
+            return None, None                           # 본인 번호 → 장부 오염·장부 미학습으로 잘못 보고된 것
+        # 남의 객체에 쓰기(PUT/PATCH/DELETE)면 _WRITE 항목으로 더 높은 점수. 메서드는 api 앞부분에서 읽음
+        write = e.get("api", "").split(" ", 1)[0] in WRITE_METHODS
+        # URL 번호 = 주인인 API는 장부가 없어도 주인을 앎 → 장부에 없어 UNKNOWN으로 온 성공 요청도 BOLA_PATH
+        if path_owner and (kind == "BOLA" or (kind == "UNKNOWN" and e["status"] in SUCCESS)):
+            return ("BOLA_PATH_WRITE" if write else "BOLA_PATH"), path_owner
         if kind == "BOLA":
-            if path_owner:
-                return "BOLA_PATH", path_owner
-            return "BOLA_LEDGER", e["owner"]
+            return ("BOLA_LEDGER_WRITE" if write else "BOLA_LEDGER"), e["owner"]
         if kind in ("ATTEMPT", "UNKNOWN", "RATE"):
             return kind, path_owner
         return None, None
@@ -145,17 +167,18 @@ class Judge:
         self.counts["scored"] += 1
         rid = e["request_id"]
         out = []
-        if item.startswith("BOLA") and victim:            # 실제로 털린 것(BOLA 성공)만 API별 피해자 기록 (확정과 무관)
+        obj = object_id(e["uri"])                         # 털린 API에는 주인이 아니라 접근한 객체 번호를 기록
+        if item.startswith("BOLA") and obj:               # 실제로 털린 것(BOLA 성공)만 API별 객체 번호 기록 (확정과 무관)
             hit = self.hits.setdefault(me, {}).setdefault(e["api"], set())
-            if victim not in hit:
-                self.counts["hits"] += 1                # 새 (공격자, API, 피해자) 조합 수 → 바뀌면 파일 저장
-            hit.add(victim)
-            self.last.update({"api": e["api"], "api_victims": sort_ids(hit)})
+            if obj not in hit:
+                self.counts["hits"] += 1                # 새 (공격자, API, 객체) 조합 수 → 바뀌면 파일 저장
+            hit.add(obj)
+            self.last.update({"api": e["api"], "api_objects": sort_ids(hit)})
 
         if me in self.confirmed:                         # 이미 확정 → 점수 계산 없이 요청만 추가
             self.last["result"] = "confirmed_user"
             return [{"type": "request", "user_id": me, "request_ids": [rid], "reason": "확정 사용자의 의심 요청"}] if rid else []
-        if item == "BOLA_PATH" and rid:
+        if item.startswith("BOLA_PATH") and rid:         # 쓰기(BOLA_PATH_WRITE)도 URL로 확인되므로 즉시 요청 확정
             out.append({"type": "request", "user_id": me, "request_ids": [rid],
                         "reason": f"URL로 확인된 BOLA ({e['uri']}, 피해자 {victim})"})
 
@@ -201,7 +224,7 @@ class Judge:
         return "normal" if rank <= 0 else self.levels[rank - 1][0]
 
     def user_hits(self, user):
-        """한 사용자가 턴 API와 피해자. {"GET /members/{id}": ["3", "24"], ...}"""
+        """한 사용자가 턴 API와 털린 객체 번호. {"GET /members/{id}": ["3", "24"], ...}"""
         return {api: sort_ids(v) for api, v in sorted((self.hits.get(user) or {}).items())}
 
     def breached(self):

@@ -10,13 +10,16 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from fixed_cfg import pin  # noqa: E402
 
 from scoring import Judge, parse_event  # noqa: E402
 from store import ConfirmedStore  # noqa: E402
 
 with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json"),
           encoding="utf-8") as _f:
-    CFG = json.load(_f)
+    CFG = pin(json.load(_f))                            # 운영 설정이 바뀌어도 기준값으로 검증 (fixed_cfg.py)
 T0 = 1793331593000
 
 
@@ -70,6 +73,34 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(u["breakdown"], {"BOLA_PATH": 120, "+victims": 30})
         self.assertEqual(len(u["request_ids"]), 3)
 
+    def test_write_methods_score_higher(self):
+        """PUT/PATCH/DELETE로 남의 객체 수정·삭제는 조회보다 높은 점수 (_WRITE 항목)"""
+        out = self.j.process(ev("2", "BOLA", "/members/3", owner="3", sec=0,
+                                api="PATCH /members/{id}", rid="w1"))
+        self.assertEqual((self.j.last["item"], self.j.last["points"], self.j.last["total"]),
+                         ("BOLA_PATH_WRITE", 60, 60))
+        self.assertIn(("request", ["w1"]), [(d["type"], d["request_ids"]) for d in out])  # 쓰기도 즉시 요청 확정
+        j2 = Judge(CFG)
+        j2.process(ev("2", "BOLA", "/orders/5", owner="9", sec=0, api="DELETE /orders/{id}"))
+        self.assertEqual((j2.last["item"], j2.last["points"], j2.last["total"]),
+                         ("BOLA_LEDGER_WRITE", 40, 40))
+
+    def test_unknown_on_path_becomes_bola_path(self):
+        """장부에 없어 UNKNOWN으로 온 /members/4 성공 조회 → URL 번호로 주인을 알아 BOLA_PATH"""
+        self.j.process(ev("1", "UNKNOWN", "/members/4", sec=0))
+        self.assertEqual((self.j.last["item"], self.j.last["victim"], self.j.last["points"]), ("BOLA_PATH", "4", 40))
+        self.j.process(ev("1", "UNKNOWN", "/members/5", sec=1, api="PATCH /members/{id}"))
+        self.assertEqual(self.j.last["item"], "BOLA_PATH_WRITE")
+
+    def test_unknown_not_upgraded(self):
+        """본인 번호 UNKNOWN은 점수 없음, 성공이 아니거나 path_owners가 아닌 API의 UNKNOWN은 그대로"""
+        self.assertEqual(self.j.process(ev("4", "UNKNOWN", "/members/4")), [])
+        self.assertEqual(self.j.last["result"], "skip")
+        self.j.process(ev("1", "UNKNOWN", "/members/4", status=500, sec=1))
+        self.assertEqual(self.j.last["item"], "UNKNOWN")
+        self.j.process(ev("1", "UNKNOWN", "/orders/999", sec=2))
+        self.assertEqual(self.j.last["item"], "UNKNOWN")
+
     def test_bonuses(self):
         """ATTEMPT 뒤 BOLA 성공 + 여러 API 보너스"""
         self.j.process(ev("2", "ATTEMPT", "/payments/1", status=403, sec=0))
@@ -99,16 +130,17 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(self.j.last["result"], "confirmed_user")
 
     def test_breached_apis(self):
-        """털린 API별 피해자: BOLA만 기록, 본인 번호·ATTEMPT 제외, 확정된 사용자도 계속 기록"""
+        """털린 API에는 주인이 아니라 접근한 객체 번호를 기록: BOLA만, 본인 번호·ATTEMPT 제외, 확정 사용자도 계속"""
         self.j.process(ev("2", "BOLA", "/members/4/addresses", owner="4", sec=0))
         self.j.process(ev("2", "BOLA", "/members/3/addresses", owner="3", sec=1))
-        self.assertEqual(self.j.last["api_victims"], ["3", "4"])
+        self.assertEqual(self.j.last["api_objects"], ["3", "4"])
         self.j.process(ev("2", "ATTEMPT", "/members/9/addresses", status=403, sec=2))
         self.j.process(ev("2", "BOLA", "/members/2", owner="99", sec=3))         # 본인 번호 → 제외
         j2 = Judge(CFG, confirmed_users=["7"])
         j2.process(ev("7", "BOLA", "/orders/57", owner="9", api="GET /orders/{id}"))
         self.assertEqual(self.j.user_hits("2"), {"GET /members/{id}/addresses": ["3", "4"]})
-        self.assertEqual(j2.user_hits("7"), {"GET /orders/{id}": ["9"]})
+        # orders/57의 주인은 9지만, 털린 API에는 접근한 객체 번호 57이 나와야 함 (주인 9 아님)
+        self.assertEqual(j2.user_hits("7"), {"GET /orders/{id}": ["57"]})
         self.j.process(ev("5", "BOLA", "/members/3/addresses", owner="3", sec=4))
         self.assertEqual(self.j.breached()["GET /members/{id}/addresses"],
                          {"victims": ["3", "4"], "attackers": ["2", "5"]})

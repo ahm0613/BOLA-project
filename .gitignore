@@ -1,0 +1,27 @@
+# 올리지 않는 것
+
+# 보관용 과거 버전 (요청에 따라 제외)
+archive/
+
+# 테스트 리셋 스크립트 (요청에 따라 제외)
+judge/reset.sh
+
+# 비밀 (하위 폴더 .gitignore에도 있지만 안전하게 한 번 더)
+**/.env
+fluent-bit/certs/server.key
+*.key
+*.pem
+
+# 파이썬 캐시
+__pycache__/
+*.pyc
+
+# 런타임 출력·상태 파일
+judge/output/
+attack/results/
+**/confirmed.json
+**/confirmed.json.tmp
+fluent-bit/confirmed1.json
+fluent-bit/ledger_days/
+fluent-bit/ledger_v2_backup.json
+fluent-bit/ledger_v3.json

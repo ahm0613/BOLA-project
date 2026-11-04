@@ -11,6 +11,9 @@ import unittest
 from contextlib import contextmanager
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from fixed_cfg import pin  # noqa: E402
 
 import db  # noqa: E402
 import judge  # noqa: E402
@@ -140,7 +143,7 @@ class RecordDbTest(unittest.TestCase):
     def setUp(self):
         """Redis·PostgreSQL 없이 Server를 만들고, DB 대신 RecorderStub을 끼움 (파일은 임시 폴더)"""
         judge.load_env()
-        cfg = judge.load_config()
+        cfg = pin(judge.load_config())
         self.tmp = tempfile.mkdtemp()
         cfg["paths"].update({k: os.path.join(self.tmp, f"{k}.out") for k in cfg["paths"]})
         cfg["db"] = {**cfg.get("db", {}), "enabled": False}

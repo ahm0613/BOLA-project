@@ -21,7 +21,8 @@ pc2 (Kong·Redis)                    pc1 (WSL Docker, 이 저장소)            
 | 폴더 | 컨테이너 | 역할 |
 |---|---|---|
 | [`fluent-bit/`](fluent-bit/README.md) | `bola-realtime` | Fluent Bit이 보내는 Kong 로그를 받아 장부(`ledger.json`)로 BOLA/ATTEMPT/UNKNOWN 판정 → Redis `bola:events`. 장부 학습(`ledger_v2.py`) |
-| [`judge/`](judge/README.md) | `bola-judge`, `judge-postgres` | Redis 이벤트로 사용자별 점수 → 공격자 확정 → `confirmed.json` + PostgreSQL 기록 |
+| [`judge/`](judge/README.md) | `bola-judge`, `judge-postgres` | Redis 이벤트로 사용자별 점수(조회·쓰기 구분) → 공격자 확정 → `confirmed.json` + PostgreSQL 기록. 1대1 API 자동 추론(`api_infer.py`) |
+| [`attack/`](attack/README.md) | — | BOLA 공격 시뮬레이터(`simulate.py`). 탐지·차단을 검증 (burst/steady/slow/rotate, 무작위 순서) |
 | `docker-compose.yml` | — | 위 두 폴더의 compose를 포함(include)해서 세 컨테이너를 한꺼번에 실행 (프로젝트 이름 `bola`) |
 
 ## 처음 준비 (pc1)

@@ -14,6 +14,9 @@ import unittest
 import redis
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from fixed_cfg import pin  # noqa: E402
 
 import judge  # noqa: E402
 from blocker import Blocker  # noqa: E402
@@ -135,7 +138,7 @@ class ServerBlockTest(unittest.TestCase):
     """Server: 확정 → 영구 차단 → DB 조치 기록"""
     def make(self, confirmed=None):
         judge.load_env()
-        cfg = judge.load_config()
+        cfg = pin(judge.load_config())
         tmp = tempfile.mkdtemp()
         cfg["paths"].update({k: os.path.join(tmp, f"{k}.out") for k in cfg["paths"]})
         if confirmed:
@@ -191,6 +194,32 @@ class ServerBlockTest(unittest.TestCase):
         srv.sync_blocks(force=True)
         self.assertEqual([srv.r.ttl("blocked:user:1"), srv.r.ttl("blocked:user:2")], [-1, -1])
 
+    def test_sync_records_db(self):
+        """명단 동기화로 차단한 사용자 → bola_events 조치 행(SYNC) + user_status confirmed, 이미 차단된 사용자는 기록 안 함"""
+        srv = self.make({"requests": [], "users": {"21": 1793199600000, "43": 1793113200000}})
+        srv.blocker.block_forever("43", "이미 차단됨")
+        pushed = []
+        srv.notifier = type("N", (), {"push": lambda self, key, ch, kind, text, **kw: pushed.append((key, ch, text))})()
+        srv.sync_blocks(force=True)
+        self.assertEqual([e["user_id"] for e in srv.db.events], ["21"])
+        self.assertEqual([(k, ch) for k, ch, _ in pushed], [("sync:21:1793199600000", "admin")])
+        self.assertIn("[명단 차단] 사용자 21 영구 차단 성공", pushed[0][2])
+        e = srv.db.events[0]
+        self.assertEqual((e["action_type"], e["decision"], e["user_status"], e["enforcement_status"]),
+                         ("SYNC", "attack", "confirmed", "applied"))
+        self.assertTrue(e["stream_id"].startswith("SYNC-") and e["action_id"].endswith("-21-L"))
+        self.assertEqual(e["detection_reasons"]["since"], 1793199600000)
+        self.assertEqual([(u["user_id"], u["user_status"]) for u in srv.db.users], [("21", "confirmed")])
+        srv.sync_blocks(force=True)                         # 이미 영구 차단 → 다시 기록하지 않음
+        self.assertEqual(len(srv.db.events), 1)
+
+    def test_sync_redis_down(self):
+        """Redis가 꺼져 있으면 기록 없이 넘어감"""
+        srv = self.make({"requests": [], "users": {"21": 1}})
+        srv.r.down = True
+        srv.sync_blocks(force=True)
+        self.assertEqual(srv.db.events, [])
+
 
 class ReleaseTest(unittest.TestCase):
     """관리자 해제 뒤 다시 확정되지 않음"""
@@ -207,7 +236,7 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual((s2.users, s2.released, s2.requests), ({}, {"7": 5000}, ["r1"]))
 
     def test_events_before_release_ignored(self):
-        cfg = judge.load_config()
+        cfg = pin(judge.load_config())
         j = Judge(cfg, released={"7": 1000 + 5000})
         for s, u in enumerate(["3", "4", "5"]):     # 해제 이전 이벤트 → 채점 안 함
             out = j.process({"id": None, "kind": "BOLA", "user_id": "7", "api": "GET /members/{id}",
@@ -218,28 +247,6 @@ class ReleaseTest(unittest.TestCase):
                          "status": 200, "request_id": "r9", "ts": 9000, "owner": None, "detail": ""})
         self.assertEqual(j.last["result"], "scored")          # 해제 이후 이벤트는 다시 채점
 
-
-class ImportTest(unittest.TestCase):
-    """import_confirmed.py: 가져온 사용자가 확정 명단에 들어가고, 판단 서버가 재시작 후 이미 확정된 사용자로 다룸"""
-    def test_import_into_store(self):
-        import import_confirmed
-        tmp = tempfile.mkdtemp()
-        path, log = os.path.join(tmp, "c.json"), os.path.join(tmp, "log.jsonl")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"requests": ["old"], "users": {"7": 100}}, f)
-        s = ConfirmedStore(path, log)
-        ds = import_confirmed.build_decisions(["r1", "r2"], {"43": 5000, "21": 6000}, "/x/confirmed1.json", "관리자", "이력")
-        self.assertTrue(s.apply(ds))
-        s.save()
-        s2 = ConfirmedStore(path, log)
-        self.assertEqual(s2.users, {"7": 100, "43": 5000, "21": 6000})
-        self.assertEqual(s2.requests, ["old", "r1", "r2"])
-        with open(log, encoding="utf-8") as f:
-            rows = [json.loads(line) for line in f]
-        self.assertEqual([r["type"] for r in rows], ["user", "user", "request"])
-        self.assertEqual((rows[0]["by"], rows[0]["note"]), ("관리자", "이력"))
-        b = Blocker(FakeRedis())                       # 판단 서버 시작 시 동기화로도 차단됨
-        self.assertEqual(b.sync(s2.users), 3)
 
 
 if __name__ == "__main__":

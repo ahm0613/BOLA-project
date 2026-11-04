@@ -7,8 +7,6 @@ import sys
 from collections import Counter, defaultdict
 from datetime import date, timedelta
 
-from common import api_key, parse_line
-
 LOG_PATH = r"data\access_fake.json"
 LEDGER_PATH = "ledger.json"
 MIN_SHARE = 0.7
@@ -17,6 +15,22 @@ CONFIRMED_PATH = "confirmed.json"
 STATE_PATH = os.path.join(DAYS_DIR, "_state.json")
 WINDOW_DAYS = 30
 CAP_MIN, CAP_MAX = 2, 10
+
+def parse_line(line):
+    """한 줄 → 딕셔너리. 빈 줄·깨진 줄이면 None"""
+    line = line.strip().strip("\x00")
+    if not line:
+        return None
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+def api_key(e):
+    """GET /orders/7  →  GET /orders/{id}  (realtime.py와 똑같아야 장부를 찾을 수 있음)"""
+    path = e["uri"].split("?")[0]
+    path = re.sub(r"/\d+(?=/|$)", "/{id}", path)
+    return f'{e["method"]} {path}'
 
 def object_key(e):
     path = e["uri"].split("?")[0]
@@ -84,7 +98,8 @@ def load_day(d):
         return json.load(f)
 
 def load_confirmed():
-    """judge.py가 쓰는 confirmed.json: {"requests": [요청ID...], "users": {사용자: 확정 시각 ms}}"""
+    """confirmed.json: {"requests": [요청ID...], "users": {사용자: 확정 시각 ms}, "released": {...}}
+    released(관리자 해제 기록)는 판단 서버용이라 읽지 않음"""
     if not os.path.exists(CONFIRMED_PATH):
         return {"requests": set(), "users": {}}
     with open(CONFIRMED_PATH, encoding="utf-8") as f:

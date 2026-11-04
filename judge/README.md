@@ -134,6 +134,37 @@ pc3 ──▶ pc1 192.168.0.40:5432 ──portproxy──▶ WSL 172.22.x.x:5432
    pd.read_sql("SELECT * FROM user_status ORDER BY risk_score DESC", conn)
    ```
 
+## Slack 알림 (`notifier.py`)
+
+판단 서버가 채점할 때 알림이 필요한지 보고 큐에 넣고, 알림 스레드가 Slack 웹훅으로 글자 메시지를 보냅니다. 웹훅이 느리거나 실패해도 판단·차단은 멈추지 않습니다.
+
+| 채널 (.env) | 알림 | 언제 | 한 번만 보내는 기준 |
+|---|---|---|---|
+| 관리자 `SLACK_ADMIN_WEBHOOK` | warning | 60점을 넘어 단계가 올라갈 때 | 사용자마다 (해제되면 다시) |
+| | attack | 공격 확정·영구 차단 순간 (warning을 건너뛰면 이것만) | 사용자마다 (해제되면 다시) |
+| | RATE | 탐지 엔진의 10분 임시 차단 | 사용자마다 하루 한 번 |
+| | 해제 | `unblock.py` 실행 | 실행할 때마다 |
+| | 1시간 요약 | 매시 정각 + 30초 (일이 없어도 보냄 = 생존 신호) | 시간대마다 |
+| 개발자 `SLACK_DEV_WEBHOOK` | 취약 API | API에서 BOLA가 처음 성공, 또는 7일 조용하다가 다시 성공 (사용자 번호 없음) | API마다 |
+| | 1시간 요약 | 매시 정각 + 30초 | 시간대마다 |
+
+- 보낸 알림은 DB `alerts` 테이블에 남깁니다 (`pending` / `sent` / `failed` / `skipped`=웹훅 없음). 같은 키는 다시 보내지 않으므로 재시작해도 중복되지 않습니다.
+- 재시작할 때 과거 이벤트를 다시 채점하는 동안, `--once`, `--dry-run`에서는 보내지 않습니다.
+- 실패하면 2·4·8·16초 뒤 다시, 5번 실패하면 `failed`. 설정은 `config.json`의 `notify`.
+
+```bash
+# 웹훅 넣기: judge/.env 의 SLACK_ADMIN_WEBHOOK=, SLACK_DEV_WEBHOOK= 에 주소를 적고 (WSL, /mnt/d/python-rule)
+docker compose up -d judge                                   # env_file은 컨테이너를 다시 만들어야 반영
+docker compose run --rm judge python notifier.py --test      # 두 채널에 시험 메시지
+docker compose exec postgres psql -U postgres -d bola_judge -c "SELECT created_at, channel, kind, status FROM alerts ORDER BY created_at DESC LIMIT 20"
+```
+
+이미 쓰고 있는 DB에 `alerts` 테이블 추가 (새 DB는 `db/init/01-schema.sql`에 들어 있음, 2026-11-03 pc1에 적용함):
+
+```bash
+docker compose exec -T postgres psql -U postgres -d bola_judge -v judge_user=judge -v dash_user=dashboard < judge/db/migrate/03-alerts.sql
+```
+
 ## confirmed.json
 
 ```json
@@ -159,17 +190,44 @@ pc3 ──▶ pc1 192.168.0.40:5432 ──portproxy──▶ WSL 172.22.x.x:5432
 | 항목 | 점수 | 조건 |
 |---|---|---|
 | `BOLA_PATH` | 40 | `/members/{id}`, `/profiles/{id}`처럼 URL 숫자가 곧 사용자 번호인 API에서 남의 번호 → 확실 |
-| `BOLA_LEDGER` | 25 | 그 밖의 BOLA (realtime.py 장부 근거) |
+| `BOLA_PATH_WRITE` | 60 | 위 `BOLA_PATH`를 PUT/PATCH/DELETE로 (남의 객체 수정·삭제 → 조회보다 위험) |
+| `BOLA_LEDGER` | 30 | 그 밖의 BOLA (realtime.py 장부 근거) |
+| `BOLA_LEDGER_WRITE` | 50 | 위 `BOLA_LEDGER`를 PUT/PATCH/DELETE로 (남의 객체 수정·삭제) |
 | `ATTEMPT` | 5 | 403/404 |
-| `UNKNOWN` | 2 | 장부에 없는 객체 |
-| `RATE` | 20 | 10초에 의심 요청 10번 초과 |
+| `UNKNOWN` | 20 | 장부에 없는 객체를 성공 조회 (주인을 몰라 BOLA로 단정 못 함) |
+| `RATE` | 10 | 10초에 의심 요청 10번 초과 |
 | `+victims` | 30 | 서로 다른 피해자 3명 이상 |
 | `+attempt_then_bola` | 20 | ATTEMPT 뒤 BOLA 성공 (우회 경로를 찾음) |
 | `+multi_api` | 10 | 2개 이상 자원 종류(members, orders, payments…)에서 BOLA |
 
-- **합계 100점 이상이면 사용자 확정**
-- **오탐 거르기:** URL 숫자가 요청자 본인인 BOLA·ATTEMPT는 점수를 주지 않습니다. 장부 오염(예: `/members/4`의 주인이 `43`)으로 잘못 보고된 경우를 거릅니다.
-- 피해자(주인)는 이벤트의 `owner` 필드를 쓰고, 없으면 `detail`의 `주인 N`에서 뽑습니다. 그래서 `realtime.py`를 고치지 않아도 됩니다.
+- **합계 100점 이상이면 사용자 확정** (점수 값은 `config.json`의 `points`에서 조정)
+- **UNKNOWN → BOLA_PATH 승격:** `path_owners` API(/members/{id} 등)에서 장부에 없어 UNKNOWN으로 온 **성공(200/204)** 요청은, URL 번호로 주인을 알 수 있으므로 `BOLA_PATH`(쓰기는 `BOLA_PATH_WRITE`)로 올려 채점합니다.
+- **오탐 거르기:** URL 숫자가 요청자 본인인 BOLA·ATTEMPT·UNKNOWN은 점수를 주지 않습니다. 장부 오염(예: `/members/4`의 주인이 `43`)이나 장부 미학습으로 잘못 보고된 경우를 거릅니다.
+- 피해자(주인)는 이벤트의 `owner` 필드를 쓰고, 없으면 `detail`의 `주인 N`에서 뽑습니다. 그래서 `realtime.py`를 고치지 않아도 됩니다. **단 "털린 API" 표시는 주인이 아니라 실제로 접근한 객체 번호(URL의 숫자)를 보여 줍니다** (예: `GET /orders/{id}` 주인 41이어도 접근한 주문 번호 99로 표시).
+
+### 1대1 추론 (`path_owners`, `api_infer.py`)
+
+`BOLA_PATH`와 본인 번호 오탐 거르기는 "URL 번호 = 사용자 번호"인 API 목록(`path_owners`)이 있어야 동작합니다.
+`config.json`에서 세 가지로 정합니다.
+
+| 값 | 동작 |
+|---|---|
+| `"auto"` (기본) | 학습 장부(`paths.ledger`)로 추론. BOLA-APP 코드·DB는 보지 않음 |
+| `[]` | 끔. 모든 BOLA를 `BOLA_LEDGER`로 (장부만으로 검증할 때) |
+| `["/members/{id}", ...]` | 사람이 직접 지정 |
+
+추론 방법: 장부의 API 키를 첫 `{id}`까지 잘라 자원별로 묶고(`GET`·`PATCH`·하위 경로를 하나로), "객체 번호 = 학습된 주인"인 비율을 셉니다.
+정상 사용자는 자기 것만 보므로 `/members/{id}`는 100%, `/orders/{id}`는 거의 0%가 나옵니다.
+
+| 조건 (`path_infer`) | 판정 |
+|---|---|
+| 표본 `min_samples`(30)개 이상 + 일치율 `min_ratio`(95%) 이상 | 1대1 → `path_owners`에 넣음 |
+| 표본 30개 이상 + 일치율 `max_ratio`(5%) 이하 | 장부 사용 |
+| 그 사이 또는 표본 부족 | 판단 보류 (쓰지 않음) |
+
+- 시작할 때 추론하고, 60초마다 장부 파일이 바뀌었는지 확인해 바뀌었으면 다시 추론합니다.
+- 1대1 자원인데 번호 ≠ 주인인 항목은 장부 오염(공격 흔적)일 가능성이 높아 주인으로 적힌 사용자를 로그에 함께 보여 줍니다.
+- 직접 확인: `python api_infer.py` (judge 폴더에서)
 
 ## 실행 (pc1)
 
@@ -201,9 +259,9 @@ python -m unittest discover tests
 [점수] 10:29:10 사용자 4 BOLA 200 /members/4 → 무시: URL 번호가 본인 (장부 오탐)
 ```
 
-- BOLA(실제로 털린 요청)이면 줄 끝에 `| GET /members/{id}/addresses {3,4}`처럼 **그 사용자가 이 API에서 지금까지 턴 피해자 전체**가 붙습니다.
-- `[확정]` 아래에 `털린 API: GET /members/{id} {3,24}`, 60초마다 `[털린 API] GET /orders/{id} 피해자 {...} ← 공격자 {...}` 요약이 나옵니다.
-- 털린 API 요약은 `output/breached_apis.json`에도 저장됩니다 (API별 피해자·공격자, `_by_user`: 공격자별 API·피해자). 새로 털린 것이 생길 때마다 갱신.
+- BOLA(실제로 털린 요청)이면 줄 끝에 `| GET /members/{id}/addresses {3,4}`처럼 **그 사용자가 이 API에서 지금까지 턴 객체 번호 전체**가 붙습니다.
+- `[확정]` 아래에 `털린 API: GET /members/{id} {3,24}`, 60초마다 `[털린 API] GET /orders/{id} 털린 객체 {...} ← 공격자 {...}` 요약이 나옵니다. 숫자는 주인이 아니라 접근한 객체 번호입니다.
+- 털린 API 요약은 `output/breached_apis.json`에도 저장됩니다 (API별 털린 객체 번호·공격자, `_by_user`: 공격자별 API·객체). 새로 털린 것이 생길 때마다 갱신.
 - 같은 내용이 `output/score_log.jsonl`에 JSON 한 줄씩 남습니다. 다른 창에서 실시간으로 보려면:
   `Get-Content output\score_log.jsonl -Wait -Encoding utf8`
 - 점수 줄을 끄려면 `python judge.py --quiet`
@@ -212,7 +270,36 @@ python -m unittest discover tests
 - `confirmed.json`은 `ledger_v2.py`가 있는 `../fluent-bit/confirmed.json`에 씁니다 (`config.json`의 `paths.confirmed`).
 - 같은 그룹·이름(`judges`/`judge-1`)으로 Redis를 읽는 다른 프로그램과 **동시에 실행하지 마세요** (이벤트가 둘로 나뉨).
 
+## 핵심 .py 쉽게 보기
+
+판단 서버는 역할이 다른 작은 파일 여러 개로 나뉘어 있습니다. 한 이벤트가 들어오면 아래 순서로 지나갑니다.
+
+```
+Redis 이벤트 1건
+   │
+judge.py (총괄)  ── 이벤트를 받아 아래 담당들에게 넘기고 결과를 모음
+   ├─▶ scoring.py    점수를 매기고 "확정?"을 판단          (api_infer.py가 미리 "어떤 API가 1대1인지" 알려 줌)
+   ├─▶ store.py      확정되면 confirmed.json에 명단 기록
+   ├─▶ blocker.py    확정된 공격자를 Redis에 영구 차단
+   ├─▶ db.py         모든 결과를 PostgreSQL에 기록
+   └─▶ notifier.py   주의·확정·요약을 Slack으로 알림
+```
+
+| 파일 | 쉽게 말하면 | 하는 일 |
+|---|---|---|
+| **`judge.py`** | 총괄 지휘자 | Redis에서 이벤트를 꺼내 나머지 담당들에게 넘기고, 시작할 때 최근 24시간을 복원하며, 60초마다 상태를 출력합니다. 다른 파일들을 **불러 쓰는 중심**입니다. |
+| **`scoring.py`** | 점수 매기는 머리 | 이벤트 하나를 보고 "이건 BOLA_PATH 40점" 식으로 분류·채점하고, 24시간 합계가 100점을 넘으면 **확정**이라고 알려 줍니다. Redis·파일을 전혀 몰라서 **테스트하기 쉽습니다**. |
+| **`api_infer.py`** | 장부로 배우는 선생 | 학습 장부만 보고 "`/members/{id}`는 URL 번호 = 주인(1대1)"인 API를 **자동으로 찾아** `scoring.py`에 알려 줍니다. 앱 코드는 보지 않습니다. (`config.json`이 `"auto"`일 때) |
+| **`store.py`** | 확정 명단 담당 | 공격자로 확정된 사용자·요청을 `confirmed.json`에 쓰고 읽습니다. 관리자 해제(`released`)도 여기서 관리합니다. 이 파일 덕에 장부 학습이 공격 기록을 빼고 할 수 있습니다. |
+| **`blocker.py`** | 차단 집행관 | 확정된 공격자를 Redis `blocked:user:<id>`에 **만료 없이** 걸어 pc2 Kong이 403으로 막게 합니다. 명단과 Redis가 어긋나면 다시 맞춥니다(동기화). |
+| **`db.py`** | 기록 보관 담당 | 모든 이벤트·상태·조치를 PostgreSQL에 저장합니다. 느린 DB가 판단을 막지 않게 **모아서 비동기로 쓰고**, 실패하면 다시 시도합니다. pc3 대시보드가 이 기록을 읽습니다. |
+| **`notifier.py`** | 연락 담당 | 주의 사용자(관리자 채널), 취약 API(개발자 채널), 매시 1시간 요약을 Slack으로 보냅니다. Slack이 느려도 판단을 막지 않게 **큐에 넣고 따로 보냅니다**. |
+
+> 설계 포인트: `scoring.py`는 "판단 규칙"만, `judge.py`는 "입출력·연결"만 담당하도록 나눠 두었습니다. 그래서 규칙을 바꿔도 Redis/DB 코드를 건드릴 필요가 없고, 규칙만 따로 테스트할 수 있습니다.
+
 ## 파일
+
+아래는 위 7개를 포함한 **전체 파일** 목록입니다.
 
 | 파일 | 역할 |
 |---|---|
@@ -223,14 +310,17 @@ python -m unittest discover tests
 | `scripts/bola-startup.ps1`, `scripts/register-startup-task.ps1` | 로그온 시 자동 시작 (컨테이너 `up -d` + 포트 전달 5432·5170). 등록은 관리자로 한 번, 결과는 `output/startup.log` |
 | `scripts/wsl-portproxy.ps1` | LAN → pc1 → WSL 포트 전달 + 방화벽 (관리자, WSL IP가 바뀌면 다시 실행). 5432(DB, `-Remote 192.168.0.26`), 5170(로그 수신, `-Port 5170 -Name "bola realtime"`) |
 | `scoring.py` | 점수·확정 로직 (Redis를 몰라서 테스트하기 쉬움) |
+| `api_infer.py` | 1대1 추론: 학습 장부로 `path_owners`를 만듦 (`"auto"`일 때) |
 | `store.py` | `confirmed.json` 읽기·쓰기(해제 포함), 확정 근거 기록 |
 | `blocker.py` | Redis 영구 차단 키 걸기·명단 동기화·해제 |
+| `notifier.py` | Slack 알림: 관리자(주의 사용자), 개발자(취약 API), 1시간 요약, 시험(`--test`) |
+| `db/migrate/03-alerts.sql` | 이미 쓰는 DB에 `alerts` 테이블 추가 |
 | `unblock.py` | 관리자용: 차단 목록 보기(`--list`), 영구 차단 해제 (판단 서버를 멈춘 뒤) |
-| `import_confirmed.py` | 관리자용: 설치 전 이력 분석 결과(`confirmed1.json`)를 확정 명단에 합치고 영구 차단 (판단 서버를 멈춘 뒤, `--dry-run`으로 미리 보기) |
 | `config.json` | Redis 주소, 점수, 기준, 시간 창, 경로, 영구 차단(`block`) |
-| `.env` | Redis 비밀번호 (git 제외) |
+| `.env` | Redis·DB 비밀번호, Slack 웹훅 주소 (git 제외) |
 | `tests/test_scoring.py` | 점수, 오탐 거르기, 보너스, 시간 창, 파일 형식 테스트 |
 | `tests/test_block.py` | 영구 차단, RATE 덮어쓰기 방지, 명단 동기화, Redis 장애, 해제 테스트 |
+| `tests/test_notify.py` | 알림 기준, 중복 방지, 재시도, 1시간 요약 테스트 (가짜 웹훅) |
 
 ## 남은 일
 

@@ -15,6 +15,9 @@ DB 기록 (pc3 Streamlit용, db.py): Redis 이벤트 한 건마다 bola_events �
   실시간 모드에서는 시작할 때와 block.sync_sec마다 confirmed.json 명단과 Redis 차단 키를 맞춤 (빠진 키를 다시 걺).
   --dry-run이면 차단하지 않음. 해제는 unblock.py.
 
+Slack 알림 (notifier.py, config.json의 notify): 관리자에게 주의 사용자(warning, 확정, RATE), 개발자에게 취약 API,
+  매시 정각 1시간 요약. 웹훅 주소는 .env의 SLACK_ADMIN_WEBHOOK, SLACK_DEV_WEBHOOK. 복원 중, --once, --dry-run이면 보내지 않음.
+
 시작할 때 최근 window_sec 이벤트를 다시 읽어 점수를 복원한 뒤, 그 다음 이벤트부터 그룹으로 받는다.
 (복원에서 이미 본 이벤트가 그룹으로 다시 오면 점수에 두 번 넣지 않고 ACK만 한다)
 접속 정보: config.json의 redis.*, 비밀번호는 .env의 REDIS_PASSWORD (없으면 비밀번호 없이 접속)
@@ -28,13 +31,16 @@ from datetime import datetime, timedelta, timezone
 
 import redis
 
+import api_infer
 import db
+import notifier
 from blocker import Blocker
 from scoring import Judge, parse_event
 from store import ConfirmedStore
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATUS_SEC = 60                                         # 몇 초마다 상태를 출력할지
+LEDGER_CHECK_SEC = 60                                   # path_owners "auto"일 때 장부 파일이 바뀌었는지 확인하는 간격
 KST = timezone(timedelta(hours=9))
 
 
@@ -79,10 +85,7 @@ def make_db(cfg, dry_run):
     if not os.getenv("PG_JUDGE_PASSWORD"):
         print("[DB] .env에 PG_JUDGE_PASSWORD가 없어 DB 기록 안 함", flush=True)
         return None
-    dsn = db.psycopg.conninfo.make_conninfo(
-        host=os.getenv("PG_HOST", "127.0.0.1"), port=os.getenv("PG_PORT", "5432"),
-        dbname=os.getenv("PG_DB", "bola_judge"), user=os.getenv("PG_JUDGE_USER", "judge"),
-        password=os.getenv("PG_JUDGE_PASSWORD"))
+    dsn = db.dsn_from_env()
     writer = db.DbWriter(dsn, flush_sec=dc.get("flush_sec", 1), sweep_sec=dc.get("sweep_sec", 10))
     err = writer.check()
     where = f"{os.getenv('PG_HOST', '127.0.0.1')}:{os.getenv('PG_PORT', '5432')}/{os.getenv('PG_DB', 'bola_judge')}"
@@ -135,15 +138,99 @@ class Server:
         self.blocker = Blocker(self.r) if bc.get("enabled") and not dry_run else None
         self.sync_sec = bc.get("sync_sec", 60)
         self.last_sync = 0.0
+        # Slack 알림 (notifier.py). 복원이 끝난 뒤 main()이 start()해야 실제로 보냄. dry-run이면 만들지 않음
+        self.notifier = None if dry_run else notifier.from_env(cfg, released=self.store.released)
+        # path_owners "auto": 사람이 적는 대신 학습 장부로 1대1 API를 추론 (api_infer.py). 복원 전에 먼저 채움
+        self.auto_owners = cfg.get("path_owners") == "auto"
+        self.ledger_path = cfg["paths"].get("ledger")
+        self.infer_cfg = {**api_infer.DEFAULTS, **(cfg.get("path_infer") or {})}
+        self.ledger_mtime = None
+        self.last_ledger_check = 0.0
+        if self.auto_owners:
+            self.refresh_path_owners(force=True)
+
+    def refresh_path_owners(self, force=False):
+        """"auto"일 때 LEDGER_CHECK_SEC마다 장부 파일 변경을 확인하고, 바뀌었으면 다시 추론해 Judge에 넣음"""
+        if not self.auto_owners or (not force and time.time() - self.last_ledger_check < LEDGER_CHECK_SEC):
+            return
+        self.last_ledger_check = time.time()
+        if not self.ledger_path:
+            print("[1대1 추론] config.json paths.ledger가 없어 추론하지 않음 (path_owners 비어 있음)", flush=True)
+            self.auto_owners = False
+            return
+        try:
+            mtime = os.path.getmtime(self.ledger_path)
+        except OSError:
+            if force:
+                print(f"[1대1 추론] 장부가 없음: {self.ledger_path} → path_owners 비어 있음, 생기면 다시 추론", flush=True)
+            return
+        if mtime == self.ledger_mtime:
+            return
+        ledger = api_infer.load_ledger(self.ledger_path)
+        if ledger is None:                              # 학습 엔진이 쓰는 도중 등 → 지금 값 유지, 다음에 다시
+            print(f"[1대1 추론] 장부를 읽지 못함 (쓰는 중일 수 있음), 지금 path_owners 유지: "
+                  f"{self.judge.path_owner_list}", flush=True)
+            return
+        self.ledger_mtime = mtime
+        owners, stats = api_infer.infer(ledger, **self.infer_cfg)
+        changed = owners != self.judge.path_owner_list
+        self.judge.set_path_owners(owners)
+        if force or changed:
+            for line in api_infer.describe(owners, stats):
+                print(line, flush=True)
 
     def sync_blocks(self, force=False):
         """sync_sec마다 confirmed.json 명단 ↔ Redis 영구 차단 키 맞춤 (Redis 초기화, RATE 10분 키 덮어쓰기 대비)"""
         if not self.blocker or (not force and time.time() - self.last_sync < self.sync_sec):
             return
         self.last_sync = time.time()
-        n = self.blocker.sync(self.store.users)
+        try:
+            missing = self.blocker.not_blocked(self.store.users)
+        except redis.RedisError as err:
+            print(f"[차단] 명단 동기화 실패 (Redis): {err}", flush=True)
+            return
+        n = 0
+        for u in missing:
+            ok = self.blocker.block_forever(u, "confirmed.json 확정 사용자 (명단 동기화)")
+            n += ok
+            self.record_sync(u, ok)
         if n or force:
             print(f"[차단] 명단 동기화: 확정 사용자 {len(self.store.users)}명 중 {n}명 새로 영구 차단", flush=True)
+
+    def record_sync(self, u, ok):
+        """명단 동기화로 영구 차단한 사용자를 DB·Slack에 남김
+        판단 서버가 점수로 확정하지 않은 사용자(ledger_v3.py가 confirmed.json에 넣은 사용자 등)나
+        Redis가 초기화돼 다시 차단한 사용자. bola_events에 조치 행 하나(SYNC-…) + user_status = confirmed"""
+        since = self.store.users.get(u)
+        now = datetime.now(KST)
+        stamp = int(time.time() * 1000)
+        result = "성공" if ok else "실패, 다음 동기화 때 재시도"
+        if self.db:
+            self.user_state[u] = ("confirmed", now)
+            self.db.put_event({
+                "stream_id": f"SYNC-{stamp}-{u}", "event_id": None, "event_at": to_dt(since) if since else None,
+                "detected_at": now, "user_id": u, "action_type": "SYNC", "api_path": None,
+                "detection_reasons": {"source": "confirmed.json", "since": since,
+                                      "since_time": to_dt(since).isoformat(timespec="seconds") if since else None},
+                "risk_score": None, "assessed_at": now, "decision": "attack",
+                "decision_reason": "confirmed.json 확정 명단에 있음 (판단 서버 밖에서 등록, 예: ledger_v3.py)",
+                "user_status": "confirmed", "user_status_updated_at": now,
+                "action_id": f"AC-SYNC-{stamp}-{u}-L",
+                "action_reason": f"명단 동기화 → 영구 차단 blocked:user:{u} ({result})",
+                "decided_at": now, "enforcement_status": "applied" if ok else "failed",
+                "enforced_at": now if ok else None,
+            })
+            self.db.put_user({"user_id": u, "user_status": "confirmed", "user_status_updated_at": now,
+                              "risk_score": None, "last_event_at": None, "last_stream_id": f"SYNC-{stamp}-{u}"})
+        if self.notifier:                               # 사용자·시작 시각마다 한 번 (Redis 초기화로 다시 걸어도 다시 안 보냄)
+            when = to_dt(since).strftime("%Y-%m-%d %H:%M") if since else "-"
+            self.notifier.push(f"sync:{u}:{since}", "admin", "sync",
+                               f"[명단 차단] 사용자 {u} 영구 차단 {result}\n"
+                               f"confirmed.json 확정 명단에 있는 사용자 (판단 서버 밖에서 등록, 예: ledger_v3.py), "
+                               f"확정 시작 {when}\n"
+                               f"오탐이면 해제 (WSL /mnt/d/python-rule): docker compose stop judge → "
+                               f"docker compose run --rm judge python unblock.py {u} --by <이름> --note \"<이유>\" → "
+                               f"docker compose start judge", user_id=u)
 
     def handle(self, stream_id, fields):
         """이벤트 하나 처리. 이미 채점한 ID면 건너뜀 (True: 새로 채점함)"""
@@ -179,6 +266,11 @@ class Server:
                             d["user_id"], f"공격 확정: 점수 {d['score']} {d['breakdown']} 피해자 {d['victims']}")
                 elif d["user_id"] not in self.store.users:  # 확정 사용자의 요청 추가는 건수로만 (상태 줄)
                     print(f"[요청] 사용자 {d['user_id']} {d['reason']}", flush=True)
+        if self.notifier:                               # 알림은 큐에 넣기만 함 (보내기는 알림 스레드)
+            try:
+                self.notifier.on_scored(self.judge.last, decisions, blocked, self.judge)
+            except Exception as err:                    # 알림 문제로 판단이 멈추지 않게
+                print(f"[알림] 처리 실패: {err}", flush=True)
         if self.db:
             self.record_db(stream_id, decisions, saved, blocked)
         return True
@@ -243,7 +335,7 @@ class Server:
             "detection_reasons": {
                 "detail": t.get("detail"), "uri": t["uri"], "status": t["status"],
                 "classified_as": t.get("item"), "points": t.get("points"), "victim": t.get("victim"),
-                "breakdown": t.get("breakdown"), "victims": t.get("victims"), "api_victims": t.get("api_victims"),
+                "breakdown": t.get("breakdown"), "victims": t.get("victims"), "api_objects": t.get("api_objects"),
             },
             "risk_score": t.get("score"), "assessed_at": now, "decision": decision, "decision_reason": reason,
             "user_status": status, "user_status_updated_at": self.user_state[u][1], **action,
@@ -272,8 +364,8 @@ class Server:
                     f"{t['breakdown']} 피해자 {t['victims']}")
             if result == "confirmed":
                 line += "  ★ 확정"
-        if t.get("api"):                                # 이 사용자가 이 API에서 지금까지 턴 피해자 전체
-            line += f"  | {t['api']} {fmt_ids(t['api_victims'])}"
+        if t.get("api"):                                # 이 사용자가 이 API에서 지금까지 턴 객체 번호 전체
+            line += f"  | {t['api']} {fmt_ids(t.get('api_objects') or [])}"
         print(line, flush=True)
         if self.score_log:
             with open(self.score_log, "a", encoding="utf-8") as f:
@@ -317,6 +409,7 @@ class Server:
                     self.r.xack(self.stream, self.group, i)
                 self.status()
                 self.sync_blocks()
+                self.refresh_path_owners()
 
     def status(self, force=False):
         """STATUS_SEC마다 처리 건수와 점수 상위 사용자 출력"""
@@ -331,11 +424,13 @@ class Server:
             b = self.blocker.counts
             print(f"[차단] 영구 차단 {b['blocked']}건 (실패 {b['failed']})", flush=True)
         for api, row in self.judge.breached().items():
-            print(f"[털린 API] {api} 피해자 {fmt_ids(row['victims'])} ← 공격자 {fmt_ids(row['attackers'])}", flush=True)
+            print(f"[털린 API] {api} 털린 객체 {fmt_ids(row['victims'])} ← 공격자 {fmt_ids(row['attackers'])}", flush=True)
         if self.db:
             d = self.db.counts
             print(f"[DB] 기록 이벤트 {d['events']} 사용자 상태 {d['users']} "
                   f"(실패 {d['errors']}, 버림 {d['dropped']})", flush=True)
+        if self.notifier and self.notifier.live:
+            print(self.notifier.status_line(), flush=True)
 
     def save_breached(self):
         """털린 API 요약을 breached_apis.json으로 저장 (임시 파일에 쓴 뒤 바꿔치기)
@@ -389,6 +484,9 @@ def main():
         srv.status(force=True)
         return
     srv.sync_blocks(force=True)                         # 이미 확정된 사용자(confirmed.json)도 영구 차단 키를 맞춤
+    if srv.notifier:                                    # 복원이 끝난 뒤부터 알림 (복원한 과거 이벤트는 보내지 않음)
+        print(srv.notifier.describe(), flush=True)
+        srv.notifier.start()
     srv.status(force=True)
 
     srv.trace = not args.quiet                          # 실시간으로 들어오는 이벤트는 점수 줄을 보여 줌
@@ -401,6 +499,8 @@ def main():
                 print(f"[Redis] 연결 끊김, 3초 뒤 다시 시도: {err}", flush=True)
                 time.sleep(3)
     except KeyboardInterrupt:
+        if srv.notifier:
+            srv.notifier.close()
         if srv.db:
             srv.db.close()
         srv.status(force=True)

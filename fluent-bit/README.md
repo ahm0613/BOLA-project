@@ -2,7 +2,11 @@
 
 pc1의 Fluent Bit가 보내는 Kong 로그를 **mTLS로 받아**, 미리 학습한 **장부(`ledger.json`)** 와 비교해 의심 요청을 판정합니다.
 결과는 Redis Stream `bola:events`로 보고하고, 의심 요청이 몰리는 사용자는 Redis 차단 키로 **임시 차단**합니다.
-최종 판단(장기 차단, 알림)은 판단 서버가 합니다.
+최종 판단(점수·장기 차단·알림)은 판단 서버가 합니다.
+
+> **두 단계 설계.** 이 엔진은 장부로 **원본 분류**(`BOLA`/`ATTEMPT`/`UNKNOWN`/`RATE`)만 붙여 Redis로 보냅니다.
+> 점수 계산과 **최종 분류**(조회/쓰기 구분 `BOLA_PATH`·`BOLA_LEDGER`·`_WRITE`, 장부에 없던 요청의 `UNKNOWN → BOLA_PATH` 승격 등)는
+> 판단 서버가 합니다. 전체 흐름은 [`../OVERVIEW.md`](../OVERVIEW.md), 점수·확정은 [`../judge/README.md`](../judge/README.md)를 보세요.
 
 > Wazuh(Indexer)를 거치는 기존 경로는 수 초에서 수십 초씩 늦습니다. 이 엔진은 그 경로를 건너뛰는 실시간 경로입니다.
 > Wazuh는 보관·대시보드 용도로 그대로 남겨 둡니다.
@@ -152,10 +156,13 @@ Redis `bola:events`에 넣는 필드 (최근 10만 건만 유지):
 
 | 필드 | 예 |
 |---|---|
-| `kind` | `BOLA` / `ATTEMPT` / `UNKNOWN` / `RATE` |
+| `kind` | `BOLA` / `ATTEMPT` / `UNKNOWN` / `RATE` (원본 분류. 최종 점수·분류는 판단 서버가 함) |
 | `user_id`, `api`, `uri`, `status` | `2`, `GET /members/{id}`, `/members/9`, `200` |
 | `request_id`, `started_at` | Kong 요청 ID, 요청 시각(ms) |
 | `detail` | `요청자 2 -> 9 (주인 9)` |
+
+> `api`에는 **HTTP 메서드가 포함**됩니다(`PATCH /members/{id}`). 판단 서버는 이 메서드를 보고 남의 객체 **수정·삭제(PUT·PATCH·DELETE)** 를
+> 조회보다 높은 `_WRITE` 점수로 매깁니다. 그래서 쓰기 공격을 구분하려고 `realtime.py`를 고칠 필요가 없습니다.
 
 Redis가 꺼져 있어도 엔진은 멈추지 않습니다. 판정은 계속하고 `[Redis] 보고 실패` 메시지만 남깁니다.
 
@@ -265,17 +272,18 @@ print(r.xinfo_groups("bola:events"))                      # 판단 서버(judges
 
 ## 10. 알려진 문제와 개선 후보
 
-| # | 내용 | 영향 |
+| # | 내용 | 영향 / 현황 |
 |---|---|---|
-| 1 | 장부에 잘못된 주인: `GET /members/{id}`, `GET /members/{id}/addresses`의 `"4": "43"` | 회원 4가 자기 정보를 봐도 BOLA. 회원·프로필처럼 ID가 곧 사용자인 API는 **경로로 판정**하면 오염이 없음 |
-| 2 | 장부 키가 **GET API**뿐 | `PATCH /members/{id}`, `POST /orders/{id}/cancel` 같은 **변경 요청은 판정하지 않음** |
+| 1 | 장부에 잘못된 주인: `GET /members/{id}`, `GET /members/{id}/addresses`의 `"4": "43"` | 회원 4가 자기 정보를 봐도 BOLA. **→ 판단 서버가 보완**: ID가 곧 사용자인 API를 `path_owners`로 **경로 판정**(1대1 자동 추론 `api_infer.py`)해 장부 오염에 면역. 본인 번호면 점수 0 |
+| 2 | 장부 키가 **GET API**뿐 | `PATCH`/`PUT`/`DELETE`도 `same_object_apis`가 같은 객체의 GET 장부로 매핑해 **판정은 됨**. **→ 판단 서버가** 이 수정·삭제를 `_WRITE`로 조회보다 **높게 채점** |
 | 3 | `add_from_list`가 `resp_ids`를 씀 | "응답 본문을 안 쓴다"는 방향과 맞지 않음. resp_ids가 없으면 새 객체가 계속 UNKNOWN |
-| 4 | 장부를 다시 읽으면 실행 중 추가분이 사라짐 | 새 객체가 다시 UNKNOWN이 됨 |
+| 4 | 장부를 다시 읽으면 실행 중 추가분이 사라짐 | 새 객체가 다시 UNKNOWN이 됨. `path_owners` API라면 판단 서버가 `UNKNOWN → BOLA_PATH`로 올려 덜 치명적 |
 | 5 | UNKNOWN도 차단 횟수에 셈 | 새 객체를 빠르게 조회하는 정상 사용자가 차단될 수 있음 |
-| 6 | 403/404면 본인 객체여도 ATTEMPT | 가벼운 오탐 |
-| 7 | BOLA를 상태 200일 때만 봄 | 201, 204 성공은 놓침 |
+| 6 | 403/404면 본인 객체여도 ATTEMPT | 가벼운 오탐 (판단 서버에서 본인 번호면 점수 0) |
+| 7 | BOLA를 상태 **200·204**일 때만 봄(`SUCCESS`) | 201 등 그 밖의 성공은 놓침 |
 | 8 | 연결, TLS 실패, 수신 건수를 출력하지 않음 | 문제가 생겼을 때 진단이 어려움 |
 | 9 | TLS 핸드셰이크를 연결을 받는 메인 스레드에서 함 | 멈춘 클라이언트 하나가 다른 연결까지 막을 수 있음 |
 | 10 | 설정이 코드에 하드코딩됨 | 기준값을 바꿀 때마다 코드 수정 필요 |
 
-행동 룰을 함께 쓰는 엔진은 `../archive/bola-rule-rule`에 보관되어 있습니다. 경로 주인(R5), 순차 ID 탐색(R6), 403/404 다발(R7), 조회 거부 뒤 변경(R12) 같은 룰을 이 엔진에 합치면 2, 5, 6번을 보완할 수 있습니다.
+- **1·2·4번은 판단 서버(`judge/`) 쪽에서 보완**했습니다. `realtime.py`는 원본 분류만 하고, 경로 판정·쓰기 채점·UNKNOWN 승격은 판단 서버가 합니다. 상세는 [`../judge/README.md`](../judge/README.md).
+- 행동 룰을 함께 쓰는 엔진은 `../archive/bola-rule-rule`에 보관되어 있습니다. 순차 ID 탐색(R6), 403/404 다발(R7) 같은 룰을 합치면 5·6번을 더 보완할 수 있습니다.

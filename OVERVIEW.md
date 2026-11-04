@@ -4,7 +4,7 @@ pc2 Kong의 API 로그를 실시간으로 받아 **BOLA(객체 수준 인가 우
 사용자별 점수가 100점을 넘으면 공격자로 확정해 **영구 차단**하며 PostgreSQL에 기록합니다(`judge`).
 pc3 Streamlit은 `bola_db.py`로 그 DB를 읽어 보여 줍니다(`dashboard`).
 
-> 마지막 정리: 2026-11-02. 2차 학습한 장부를 쓰고 있고, 예전 기록(DB, Redis, 확정 명단)은 모두 비운 뒤 처음부터 쌓는 중입니다.
+> 마지막 정리: 2026-11-04. 2차 학습한 장부를 쓰고 있고, 예전 기록(DB, Redis, 확정 명단)은 모두 비운 뒤 처음부터 쌓는 중입니다. 점수에 조회/쓰기 구분과 1대1 자동 추론(`path_owners: "auto"`)이 반영돼 있습니다.
 
 목차
 
@@ -26,9 +26,9 @@ pc3 Streamlit은 `bola_db.py`로 그 DB를 읽어 보여 줍니다(`dashboard`).
 
 ```
 [장부 학습, 수동]  pc1
-  access_fake.json ─ledger_v2.py─▶ ledger_days + 1차 장부 ─ledger_v3.py --apply─▶ ledger.json (2차)
-                                                          └─▶ confirmed1.json (설치 전 이력의 BOLA 사용자)
-                                                                   └─ 확인 후 import_confirmed.py ─▶ 영구 차단
+  access_fake.json ─ledger_v2.py─▶ ledger_days + 1차 장부 ─ledger_v3.py─▶ confirmed.json (설치 전 BOLA 사용자)
+                                                          ─ledger_v2.py─▶ ledger.json (그 사용자를 뺀 깨끗한 장부)
+                   판단 서버를 그 뒤에 켜면 confirmed.json 명단을 영구 차단
 
 [실시간 탐지·차단, Docker]
 pc2 (게이트웨이)                      pc1 (이 PC, WSL Docker)                              pc3
@@ -52,11 +52,12 @@ pc2 (게이트웨이)                      pc1 (이 PC, WSL Docker)             
 | 순서 | 파일 | 실행 | 역할 |
 |---|---|---|---|
 | 1 | `fluent-bit/ledger_v2.py` | 수동 | 학습 로그로 1차 장부 |
-| 2 | `fluent-bit/ledger_v3.py` | 수동 | 공격자를 찾아 빼고 2차 장부 (깨끗한 장부), 공격자 목록 `confirmed1.json` |
+| 2 | `fluent-bit/ledger_v3.py` | 수동 (설치할 때) | 1차 장부로 설치 전 로그의 BOLA 사용자·요청을 찾아 `confirmed.json`에 합침 (판단 서버가 꺼져 있을 때만, `--dry-run`은 미리 보기). 그 뒤 `ledger_v2.py`를 다시 돌려 깨끗한 장부 |
 | 3 | `fluent-bit/realtime.py` | Docker `bola-realtime` | 장부로 BOLA 판정, 10분 임시 차단 |
-| 4 | `judge/judge.py` | Docker `bola-judge` | 점수, 확정, **영구 차단**, DB 기록 |
-| 5 | `judge/unblock.py`, `import_confirmed.py` | 관리자 수동 | 영구 차단 해제 / 설치 전 이력 공격자 가져와 차단 |
+| 4 | `judge/judge.py` | Docker `bola-judge` | 점수(조회·쓰기 구분), 확정, **영구 차단**, DB 기록. 1대1 API 자동 추론(`api_infer.py`) |
+| 5 | `judge/unblock.py` | 관리자 수동 | 영구 차단 해제 (오탐일 때) |
 | 6 | `dashboard/bola_db.py` | pc3 | DB 읽기 |
+| — | `attack/simulate.py` | 수동 (검증용) | 본인 시스템에 BOLA 공격을 보내 탐지·차단을 검증 (burst/steady/slow/rotate, 무작위 순서). 상세는 `attack/README.md` |
 
 ---
 
@@ -112,7 +113,7 @@ pc2 (게이트웨이)                      pc1 (이 PC, WSL Docker)             
 | 지금 영구 차단 명단 | 명단 파일 | `fluent-bit/confirmed.json` | ✅ |
 | 지금 Kong이 막고 있는 사용자 | Redis 차단 키 | `docker compose exec judge python unblock.py --list` | Redis |
 | 탐지·판단·조치 전체 이력 | DB | `bola_events`, `user_status` (psql, DBeaver, pc3 대시보드) | ✅ |
-| 장부 학습 결과 | 학습 스크립트 화면 출력 | `python ledger_v2.py`, `python ledger_v3.py` 실행 화면 | 화면만 (결과 파일은 `ledger.json`, `confirmed1.json`) |
+| 장부 학습 결과 | 학습 스크립트 화면 출력 | `python ledger_v2.py`, `python ledger_v3.py` 실행 화면 | 화면만 (결과 파일은 `ledger.json`, `confirmed.json`) |
 | 컨테이너 자동 시작, 포트 전달 | 스크립트 로그 | `judge/output/startup.log`, `portproxy.log` | ✅ |
 | 요청 원본 | pc2 Kong 로그 | pc2 `/logs/kong/access.json` (kong-logs 볼륨) | pc2 |
 | pc2 → pc1 전송 오류 (연결, TLS) | pc2 Fluent Bit | pc2에서 `docker logs <fluent-bit 컨테이너>` | pc2 |
@@ -157,7 +158,7 @@ docker compose logs -f realtime | grep '요청자 7 '                  # 특정 
 | `[차단] 사용자 7 영구 차단 (blocked:user:7) …` | Redis 영구 차단 성공 |
 | `[차단] 사용자 7 영구 차단 실패: … → 다음 동기화 때 다시 시도` | Redis 문제. 60초마다 재시도 |
 | `[상태] 이벤트 N (채점 N, 본인 번호 제외 N) 확정 사용자 N … \| 점수 상위 7:150` | 60초마다 요약 |
-| `[털린 API] GET /members/{id} 피해자 {3,4,5} ← 공격자 {7}` | 60초마다 요약 |
+| `[털린 API] GET /members/{id} 털린 객체 {3,4,5} ← 공격자 {7}` | 60초마다 요약 (숫자는 주인이 아니라 접근한 객체 번호) |
 | `[DB] 기록 이벤트 N 사용자 상태 N (실패 0, 버림 0)` | 60초마다. 실패·버림이 늘면 DB 문제 |
 | `[Redis] 연결 끊김, 3초 뒤 다시 시도` | Redis 재시작, 네트워크 |
 | `[오류] … 처리 실패` | 이상한 이벤트 하나 (서버는 계속 돎) |
@@ -174,7 +175,7 @@ docker compose logs --since 1h judge | grep -E '오류|실패|끊김'   # 문제
 |---|---|---|
 | `score_log.jsonl` | 이벤트 하나의 채점 결과 (JSON). `user_id`, `kind`, `uri`, `item`, `points`, `total`, `breakdown`, `result` | 실시간 모드에서 이벤트마다 |
 | `confirmed_log.jsonl` | 확정·해제 근거 (감사 기록). `type`: `user`(사용자 확정), `request`(요청 확정), `release`(해제) | 확정·해제·가져오기 때 |
-| `breached_apis.json` | API별 피해자·공격자, 공격자별 API (`_by_user`) | 새로 털린 게 생길 때 덮어씀 |
+| `breached_apis.json` | API별 털린 객체 번호·공격자, 공격자별 API (`_by_user`) | 새로 털린 게 생길 때 덮어씀 |
 | `startup.log`, `portproxy.log` | 로그온 자동 시작, 포트 전달 결과 | 스크립트 실행 때 |
 | `archive_20261102/` | 11/02 초기화 전 기록 보관 | — |
 
@@ -283,17 +284,20 @@ Redis `bola:events`를 소비자 그룹 `judges`로 읽어 사용자별 점수�
 
 | 항목 | 점수 | 조건 |
 |---|---|---|
-| `BOLA_PATH` | 40 | `/members/{id}`, `/profiles/{id}`에서 남의 번호 (URL로 확실) |
-| `BOLA_LEDGER` | 25 | 그 밖의 BOLA (장부 근거) |
-| `RATE` | 20 | 임시 차단 발생 |
+| `BOLA_PATH` / `BOLA_PATH_WRITE` | 40 / 60 | `/members/{id}`, `/profiles/{id}`에서 남의 번호 조회 / 수정·삭제(PUT·PATCH·DELETE) (URL로 확실) |
+| `BOLA_LEDGER` / `BOLA_LEDGER_WRITE` | 30 / 50 | 그 밖의 BOLA 조회 / 수정·삭제 (장부 근거) |
+| `UNKNOWN` | 20 | 장부에 없는 객체를 성공 조회 |
 | `ATTEMPT` | 5 | 403/404 |
-| `UNKNOWN` | 2 | 장부에 없는 객체 |
+| `RATE` | 10 | 임시 차단 발생 |
 | `+victims` | 30 | 서로 다른 피해자 3명 이상 |
 | `+attempt_then_bola` | 20 | ATTEMPT 뒤 BOLA 성공 |
 | `+multi_api` | 10 | 2개 이상 자원 종류에서 BOLA |
 
 - 단계: `normal` → `watch`(30) → `warning`(60) → **`confirmed`(100, 확정 + 영구 차단)**
-- URL 번호가 본인인 BOLA·ATTEMPT는 점수 없음 (`decision = ignored`).
+- 쓰기(PUT·PATCH·DELETE)는 남의 객체 수정·삭제라 조회보다 높은 `_WRITE` 점수.
+- `path_owners`(URL 번호=사용자 번호 API)는 `config.json`에서 `"auto"`면 학습 장부로 자동 추론(`api_infer.py`), `[]`면 끔, 직접 목록 지정도 가능.
+- `path_owners` API에서 장부에 없어 `UNKNOWN`으로 온 성공 요청은 `BOLA_PATH`로 올려 채점.
+- URL 번호가 본인인 BOLA·ATTEMPT·UNKNOWN은 점수 없음 (`decision = ignored`).
 - `confirmed.json`의 `released`(관리자 해제) 시각 이전 이벤트는 채점·DB 기록 안 함.
 - 시작할 때 최근 24시간 이벤트로 점수 복원, 이후 새 이벤트만 받음 (처리 후 ACK).
 
@@ -310,7 +314,7 @@ pc2 Kong ─▶ 요청마다 GET blocked:user:<id>, 있으면 403
 | 차단 | 거는 곳 | 기간 | 푸는 방법 |
 |---|---|---|---|
 | 임시 (RATE) | `realtime.py` | 10분 | 자동 만료, DB `expired` |
-| 영구 | `judge.py`, `import_confirmed.py` | 없음 | `unblock.py` (6장) |
+| 영구 | `judge.py` (설치 전 이력은 `ledger_v3.py` → confirmed.json → judge 시작 때 차단) | 없음 | `unblock.py` (6장) |
 
 끄려면 `judge/config.json`의 `"block": {"enabled": false}` → `docker compose restart judge`.
 
@@ -333,7 +337,7 @@ pc2 Kong ─▶ 요청마다 GET blocked:user:<id>, 있으면 403
 
 ### 5-5. 조회: `dashboard/bola_db.py` (pc3)
 
-pc3 Streamlit 앱이 `import bola_db`로 씁니다. 읽기 전용 계정 + 읽기 전용 세션, 한국 시간. 자세한 내용은 [`dashboard/README.md`](dashboard/README.md).
+pc3 Streamlit 앱이 `import bola_db`로 씁니다. 읽기 전용 계정 + 읽기 전용 세션, 한국 시간. (대시보드는 pc3에서 도는 별도 컴포넌트입니다.)
 
 | 함수 | 가져오는 것 |
 |---|---|
@@ -342,58 +346,59 @@ pc3 Streamlit 앱이 `import bola_db`로 씁니다. 읽기 전용 계정 + 읽�
 | `recent_events` / `risky_users` / `active_actions` | 실시간 화면용 |
 | `status_counts` / `event_counts` / `events_per_minute` | 집계 |
 
-### 5-6. 장부 학습 (수동, 2단계)
+### 5-6. 장부 학습 (수동, 설치할 때)
 
-학습 로그는 `fluent-bit/data/access_fake.json`입니다. 실제 설치에서는 **솔루션 설치 전 고객사의 접근 로그**를 같은 형식으로 만든 것이고, 지금은 pc2에서 `gen_fake_logs.py --days 30`으로 만듭니다.
+학습 로그는 `fluent-bit/data/access_fake.json`입니다. 실제 설치에서는 **솔루션 설치 전 고객사의 접근 로그**를 같은 형식으로 만든 것이고, 지금은 pc2에서 `gen_fake_logs.py --days 30`으로 만듭니다. 학습(장부 만들기) 상세는 `fluent-bit/README.md`를 보세요.
 
 ```powershell
+# 판단 서버가 꺼져 있어야 함 (WSL: docker compose stop judge)
 cd D:\python-rule\fluent-bit                       # 상대 경로라 이 폴더 안에서
-python ledger_v2.py                                # 1차: ledger_days + ledger.json
-python ledger_v3.py --log data\access_fake.json    # 2차 미리보기: confirmed1.json + ledger_v3.json
-python ledger_v3.py --apply                        # 2차 장부를 ledger.json에 (1차는 ledger_v2_backup.json)
+python ledger_v2.py                                # ① 1차: ledger_days + ledger.json
+python ledger_v3.py --dry-run                      # ② BOLA 사용자 찾기 (미리 보기)
+python ledger_v3.py                                # ② confirmed.json에 합침
+python ledger_v2.py                                # ③ confirmed.json을 빼고 다시 학습 → 깨끗한 ledger.json
+# WSL: docker compose up -d                        # ④ 판단 서버가 켜지면서 명단을 영구 차단
 ```
 
-학습 결과는 **실행 화면에만** 출력됩니다 (날짜별 로그 수, 의심 사용자 표, 1차 → 2차 비교).
+학습 결과는 **실행 화면에만** 출력됩니다 (날짜별 로그 수, 의심 사용자 표, 합칠 내용).
 
-**1차 학습 `ledger_v2.py`**
-1. 어제부터 30일치를 날짜별로 집계 (`ledger_days/`, 이미 만든 날짜는 재사용).
+**학습 `ledger_v2.py`** (①, ③)
+1. 어제부터 30일치를 날짜별로 집계 (`ledger_days/`, 이미 만든 날짜는 재사용. `confirmed.json`이 바뀌면 다시 만듦).
 2. `confirmed.json`의 확정 요청과 확정 사용자의 확정 시각 이후 요청은 뺌.
 3. 하루에 같은 객체를 여러 번 봐도 상한(cap)까지만 셈.
 4. 한 사용자의 몫이 70% 이상이면 주인, 아니면 `null`.
 
-**2차 학습 `ledger_v3.py`**
+**BOLA 사용자 찾기 `ledger_v3.py`** (②)
 ```
-fluent-bit/ledger_days (30일 집계)
-   ├─ ① 1차 장부 계산 (ledger_v2.py와 같은 방법, 메모리에서)
-   ├─ ② 1차 장부로 다시 훑기 → 피해자 3명 이상 = BOLA 사용자 ─▶ confirmed1.json users
-   ├─ ③ (--log) 원본 로그에서 그 사용자의 공격 요청 ID ───────▶ confirmed1.json requests
-   └─ ④ 그 사용자 기록을 빼고 다시 학습 → ledger_v3.json (--apply면 ledger.json)
+ledger_days (30일 집계) + ledger.json (1차 장부 주인)
+   ├─ 사용자별 "남의 것" 피해자 3명 이상 = BOLA 사용자 ─▶ confirmed.json users (처음 공격한 날 00:00)
+   └─ 원본 로그에서 그 사용자의 공격 요청 ID ───────────▶ confirmed.json requests
 ```
 
 | 옵션 | 하는 일 |
 |---|---|
-| (없음) | BOLA 사용자 찾기 + 2차 장부 미리보기 |
-| `--log 원본 로그` | `requests`(공격 요청 ID)까지 채움 |
-| `--apply` | 2차 장부를 `ledger.json`으로. 두 번 해도 1차 백업은 덮어쓰지 않음 |
+| (없음) | `confirmed.json`에 합침. **판단 서버가 켜져 있으면 거부** (켜진 판단 서버가 덮어써서 사라지므로) |
+| `--dry-run` | 찾기만, 결과 출력 (파일 안 바꿈) |
+| `--log 원본 로그` | 기본 `data\access_fake.json` |
 | `--truth 정답지` | 정답과 비교 |
 
-- `confirmed1.json`은 **설치 전 이력에서 BOLA를 일으킨 사용자**입니다. 확인 후 `import_confirmed.py`로 차단 명단에 넣습니다 (6-2).
+- `ledger_v3.py`가 넣은 사용자는 판단 서버가 켜질 때 Redis에 영구 차단됩니다. DB·Slack에는 기록되지 않습니다.
 - 403/404만 낸 사용자는 찾지 못합니다 (`ledger_days`에 상태 200 요청만 집계됨).
-- 그 사용자의 본인 객체도 장부에서 빠집니다 (볼 때 `UNKNOWN`, 목록 화면을 열면 다시 채워짐).
+- 관리자가 해제한 사용자(`released`)는 다시 넣지 않습니다.
 
-**현재 장부** (10/03~11/01)
+**현재 파일** (2026-11-03)
 
-| 파일 | 내용 | 객체 | 주인 `null` | 오염 (`/members/4 → 43`) |
-|---|---|---|---|---|
-| `ledger.json` | **2차 (탐지에 사용)** | 1,359 | 0 | 없음 |
-| `ledger_v2_backup.json` | 1차 백업 | 1,395 | 14 | 있음 |
-| `confirmed1.json` | 설치 전 이력의 BOLA 사용자 | 21, 43, 52 / 요청 498건 | — | — |
+| 파일 | 내용 |
+|---|---|
+| `ledger.json` | 예전 방식의 2차 장부 (탐지에 사용 중, 객체 1,359) |
+| `confirmed.json` | 비어 있음 (설치 전 BOLA 사용자 21, 43, 52는 아직 넣지 않음) |
+| `ledger_v2_backup.json`, `ledger_v3.json`, `confirmed1.json` | 예전 방식이 남긴 파일. 이제 쓰지 않음 (지워도 됨) |
 
 ---
 
 ## 6. 영구 차단 관리
 
-두 스크립트 모두 **판단 서버를 멈춘 뒤** 실행합니다 (켜져 있으면 거부). 판단 서버는 확정 명단을 메모리에 들고 있다가 `confirmed.json`을 다시 쓰고 60초마다 차단 키를 다시 걸기 때문입니다. 멈추는 동안에도 탐지 엔진과 Kong 차단은 계속 동작하고, 쌓인 이벤트는 다시 켜면 이어서 처리됩니다.
+두 스크립트 모두(`ledger_v3.py`도 같음) **판단 서버를 멈춘 뒤** 실행합니다 (켜져 있으면 거부). 판단 서버는 확정 명단을 메모리에 들고 있다가 `confirmed.json`을 다시 쓰고 60초마다 차단 키를 다시 걸기 때문입니다. 멈추는 동안에도 탐지 엔진과 Kong 차단은 계속 동작하고, 쌓인 이벤트는 다시 켜면 이어서 처리됩니다.
 
 ### 6-1. 차단 목록 보기, 해제: `judge/unblock.py`
 
@@ -407,17 +412,7 @@ docker compose start judge
 
 Redis 키 삭제, `confirmed.json`에서 제거 + `released` 기록, `confirmed_log.jsonl`에 `release`, DB 조치 `released` + `user_status = normal`.
 
-### 6-2. 설치 전 이력의 BOLA 사용자 차단: `judge/import_confirmed.py`
-
-```bash
-docker compose stop judge
-docker compose run --rm judge python import_confirmed.py /fluent-bit/confirmed1.json --dry-run          # 미리 보기
-docker compose run --rm judge python import_confirmed.py /fluent-bit/confirmed1.json --by 관리자이름 --note "설치 전 이력 분석"
-docker compose run --rm judge python import_confirmed.py /fluent-bit/confirmed1.json --users 43,21 --by … --note …   # 일부만
-docker compose start judge
-```
-
-`confirmed.json`에 합침 (영구 차단 명단 + 학습 제외), Redis 영구 차단, `confirmed_log.jsonl`에 `user`(근거, 승인자), DB 조치 행(`AC-IMPORT-…-L`) + `user_status = confirmed`.
+> 설치 전 이력의 BOLA 사용자는 `fluent-bit/ledger_v3.py`가 직접 `confirmed.json`에 넣고(5-6), 판단 서버가 켜질 때 영구 차단됩니다. 별도 가져오기 도구는 없습니다.
 
 ---
 
@@ -487,8 +482,8 @@ docker compose exec -T postgres psql -U postgres -d bola_judge < judge/output/ba
 | 대상 | 상태 |
 |---|---|
 | 컨테이너 | `bola-realtime`, `bola-judge`, `judge-postgres` 실행 중 |
-| 장부 | 2차 장부 사용 중 (`ledger.json`, 객체 1,359개, `null`·오염 0) |
-| `confirmed1.json` | 설치 전 이력의 BOLA 사용자 21, 43, 52 (아직 차단 명단에 가져오지 않음) |
+| 장부 | 예전 방식의 2차 장부 사용 중 (`ledger.json`, 객체 1,359개, `null`·오염 0) |
+| 설치 전 BOLA 사용자 | 21, 43, 52 (`ledger_v3.py` 미리 보기 결과, 아직 `confirmed.json`에 넣지 않음) |
 | `confirmed.json` | 빈 명단 |
 | Redis 이벤트, 차단 키 | 초기화 후 새로 쌓이는 중 |
 | DB | 초기화 후 새로 쌓이는 중 |
@@ -526,16 +521,15 @@ powershell -ExecutionPolicy Bypass -File D:\python-rule\judge\scripts\wsl-portpr
 D:\python-rule
 ├─ fluent-bit/   pc1 운영 (탐지 + 장부 학습)
 │   ├─ realtime.py            실시간 탐지 (컨테이너 bola-realtime)
-│   ├─ ledger_v2.py           1차 학습         ledger_v3.py   2차 학습 + 공격자 찾기
-│   ├─ ledger.json            탐지 장부 (2차)   ledger_v2_backup.json  1차 백업   ledger_v3.json  2차 미리보기
+│   ├─ ledger_v2.py           장부 학습        ledger_v3.py   설치 전 BOLA 사용자 찾기 → confirmed.json
+│   ├─ ledger.json            탐지 장부
 │   ├─ ledger_days/           날짜별 집계 (학습 데이터)
 │   ├─ data/access_fake.json  학습 로그
-│   ├─ confirmed.json         영구 차단 명단 (판단 서버가 씀)
-│   ├─ confirmed1.json        설치 전 이력의 BOLA 사용자 (ledger_v3.py가 씀)
+│   ├─ confirmed.json         영구 차단 명단 + 학습 제외 (판단 서버, ledger_v3.py가 씀)
 │   └─ certs/                 mTLS 인증서
 ├─ judge/        pc1 운영 (판단 + 영구 차단 + DB)
 │   ├─ judge.py, scoring.py, blocker.py, store.py, db.py, config.json
-│   ├─ unblock.py, import_confirmed.py      관리자용
+│   ├─ unblock.py      관리자용 (영구 차단 해제)
 │   ├─ db/init/        DB 테이블·계정 (처음 한 번)
 │   ├─ scripts/        포트 전달, 자동 시작
 │   └─ output/         score_log.jsonl, confirmed_log.jsonl, breached_apis.json, archive_20261102/
