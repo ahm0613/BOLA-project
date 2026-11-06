@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>상품 | BOLA Shop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page wrap">
+    <div class="list-head">
+      <div><h1 id="title">전체 상품</h1><span class="small" id="count"></span></div>
+      <div class="sorts" id="sorts"></div>
+    </div>
+    <div class="grid" id="list"></div>
+    <div class="empty" id="empty" hidden>조건에 맞는 상품이 없어요. 다른 검색어로 찾아보세요.</div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    const SORTS = { popular: '인기순', new: '신상품순', price_asc: '낮은 가격순', price_desc: '높은 가격순', rating: '평점순' };
+    const sort = params.get('sort') ?? 'popular';
+
+    const sortLink = (key) => {
+      const p = new URLSearchParams(location.search);
+      p.set('sort', key);
+      return el('a', { href: `?${p}`, class: key === sort ? 'on' : null }, SORTS[key]);
+    };
+    document.getElementById('sorts').append(...Object.keys(SORTS).map(sortLink));
+
+    (async () => {
+      const qs = new URLSearchParams({ sort });
+      if (params.get('category')) qs.set('category', params.get('category'));
+      if (params.get('q')) qs.set('q', params.get('q'));
+
+      const [items, cats] = await Promise.all([pub(`/products?${qs}`), pub('/categories')]);
+      const cat = cats.find((c) => String(c.id) === params.get('category'));
+      const title = params.get('q') ? `'${params.get('q')}' 검색 결과` : cat?.name ?? (params.get('sort') === 'new' ? '신상품' : params.get('sort') === 'popular' ? '베스트' : '전체 상품');
+      document.getElementById('title').textContent = title;
+      document.title = `${title} | BOLA Shop`;
+      document.getElementById('count').textContent = `상품 ${items.length}개`;
+      document.getElementById('list').append(...items.map(productCard));
+      document.getElementById('empty').hidden = items.length > 0;
+    })().catch((ex) => toast(errorText(ex)));
+  </script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+{
+  "redis": {
+    "host": "192.168.0.39",
+    "port": 6379,
+    "stream": "bola:events",
+    "group": "judges",
+    "consumer": "judge-1"
+  },
+  "paths": {
+    "confirmed": "../engine/confirmed.json",
+    "log": "output/confirmed_log.jsonl",
+    "score_log": "output/score_log.jsonl",
+    "breached": "output/breached_apis.json",
+    "ledger": "../engine/ledger.json"
+  },
+  "window_sec": 86400,
+  "threshold": 100,
+  "levels": {"watch": 30, "warning": 60},
+  "db": {"enabled": true, "flush_sec": 1, "sweep_sec": 10, "rate_block_sec": 600},
+  "block": {"enabled": true, "sync_sec": 60},
+  "notify": {"enabled": true, "admin_levels": ["warning", "attack"], "rate": true, "quiet_days": 7,
+             "summary": true, "summary_delay_sec": 30, "retries": 5, "timeout_sec": 10},
+  "points": {
+    "BOLA_PATH": 40,
+    "BOLA_PATH_WRITE": 60,
+    "BOLA_LEDGER": 30,
+    "BOLA_LEDGER_WRITE": 50,
+    "ATTEMPT": 5,
+    "UNKNOWN": 20,
+    "RATE": 10
+  },
+  "bonus": {
+    "victims": {"min": 3, "points": 30},
+    "attempt_then_bola": {"points": 20},
+    "multi_api": {"min": 2, "points": 10}
+  },
+  "path_owners": "auto",
+  "path_infer": {"min_samples": 30, "min_ratio": 0.95, "max_ratio": 0.05}
+}

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>장바구니 | BOLA Shop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page wrap">
+    <h1 style="margin-bottom:18px">장바구니</h1>
+    <div class="two-col">
+      <div class="panel">
+        <label style="display:flex;gap:8px;align-items:center;padding-bottom:12px;border-bottom:1px solid var(--line)">
+          <input type="checkbox" id="all" checked> 전체 선택 <span class="small" id="sel-count"></span>
+        </label>
+        <div id="items"></div>
+        <div class="empty" id="empty" hidden>장바구니가 비어 있어요. <a href="/products.html" style="text-decoration:underline">상품 보러 가기</a></div>
+      </div>
+      <aside class="panel summary">
+        <h3 style="margin-bottom:10px">결제 예정 금액</h3>
+        <div class="sum-row"><span>상품 금액</span><span id="sum-items"></span></div>
+        <div class="sum-row"><span>배송비</span><span id="sum-ship"></span></div>
+        <div class="sum-row total"><span>합계</span><span id="sum-total"></span></div>
+        <button class="btn dark block" id="order" style="margin-top:16px">주문하기</button>
+        <p class="small" style="margin:10px 0 0">5만 원 이상 구매 시 무료배송</p>
+      </aside>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    requireLogin();
+    let items = [];
+    const selected = new Set();
+
+    function summary() {
+      const chosen = items.filter((it) => selected.has(it.id));
+      const sum = chosen.reduce((s, it) => s + it.final_price * it.quantity, 0);
+      const ship = sum === 0 || sum >= 50000 ? 0 : 3000;
+      document.getElementById('sum-items').textContent = won(sum);
+      document.getElementById('sum-ship').textContent = ship ? won(ship) : '무료';
+      document.getElementById('sum-total').textContent = won(sum + ship);
+      document.getElementById('sel-count').textContent = `(${chosen.length}/${items.length})`;
+      document.getElementById('all').checked = items.length > 0 && chosen.length === items.length;
+      document.getElementById('order').disabled = chosen.length === 0;
+    }
+
+    async function setQty(it, q) {
+      q = Math.min(Math.max(q, 1), 99);
+      try {
+        await api(`/cart/items/${it.id}`, { method: 'PATCH', body: { quantity: q } });
+        it.quantity = q;
+        render();
+      } catch (ex) { toast(errorText(ex)); }
+    }
+
+    async function remove(it) {
+      try {
+        await api(`/cart/items/${it.id}`, { method: 'DELETE' });
+        items = items.filter((x) => x !== it);
+        selected.delete(it.id);
+        render();
+        updateCartCount();
+      } catch (ex) { toast(errorText(ex)); }
+    }
+
+    function render() {
+      const box = document.getElementById('items');
+      box.replaceChildren(...items.map((it) => el('div', { class: 'line-item' },
+        el('input', { type: 'checkbox', checked: selected.has(it.id), 'aria-label': '선택',
+          onchange: (e) => { e.target.checked ? selected.add(it.id) : selected.delete(it.id); summary(); } }),
+        el('a', { class: 'thumb', href: `/product.html?id=${it.product_id}` }, el('img', { src: imgSrc(it.image), alt: '' })),
+        el('div', { class: 'grow' },
+          el('div', { class: 'small' }, it.brand),
+          el('a', { href: `/product.html?id=${it.product_id}` }, it.name),
+          el('div', { class: 'qty', style: 'margin-top:8px' },
+            el('button', { type: 'button', 'aria-label': '수량 줄이기', onclick: () => setQty(it, it.quantity - 1) }, '−'),
+            el('input', { type: 'number', value: it.quantity, 'aria-label': '수량', onchange: (e) => setQty(it, parseInt(e.target.value, 10) || 1) }),
+            el('button', { type: 'button', 'aria-label': '수량 늘리기', onclick: () => setQty(it, it.quantity + 1) }, '+'))),
+        el('div', { style: 'text-align:right' },
+          el('div', { class: 'price' }, won(it.final_price * it.quantity)),
+          el('button', { class: 'btn sm', style: 'margin-top:8px', onclick: () => remove(it) }, '삭제')))));
+      document.getElementById('empty').hidden = items.length > 0;
+      summary();
+    }
+
+    document.getElementById('all').onchange = (e) => {
+      selected.clear();
+      if (e.target.checked) items.forEach((it) => selected.add(it.id));
+      render();
+    };
+    document.getElementById('order').onclick = () => {
+      location.href = `/checkout.html?items=${[...selected].join(',')}`;
+    };
+
+    (async () => {
+      items = await api('/cart');
+      items.forEach((it) => selected.add(it.id));
+      render();
+    })().catch((ex) => toast(errorText(ex)));
+  </script>
+</body>
+</html>

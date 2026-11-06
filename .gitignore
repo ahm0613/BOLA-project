@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------
+# 비밀 정보 (절대 올리지 않음)
+# ---------------------------------------------------------------
+**/.env
+*.pem
+*.key
+*.p12
+*.pfx
+app/keys/
+app/nginx/certs/
+app/fluent-bit/certs/
+app/log-certs/
+engine/certs/
+**/test_users*.csv
+
+# ---------------------------------------------------------------
+# 생성물 · 실행 중 생기는 파일
+# ---------------------------------------------------------------
+node_modules/
+dist/
+*.tsbuildinfo
+__pycache__/
+*.pyc
+app/logs/
+engine/data/
+engine/ledger_days/
+engine/ledger_v2_backup.json
+engine/ledger_v3.json
+**/confirmed.json
+**/confirmed.json.tmp
+**/confirmed1.json
+judge/output/
+attack/results/
+*.log
+
+# ---------------------------------------------------------------
+# 보관용 · 개인 파일
+# ---------------------------------------------------------------
+archive/
+judge/reset.sh
+*.zip
+*.bak
+*.rpm
+*.mp4

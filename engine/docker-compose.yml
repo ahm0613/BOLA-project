@@ -1,0 +1,16 @@
+# 실시간 탐지 엔진 (pc1)
+# 사용법 (engine 폴더에서, 판단 서버는 judge 폴더에서 따로):
+#   docker compose up -d --build     실행
+#   docker compose logs -f realtime  탐지 로그 보기
+# 전제: certs/server.key, .env(REDIS_PASSWORD)가 이 폴더에 있음 (둘 다 git 제외)
+# pc2 Fluent Bit → pc1 192.168.0.40:5170 → (Windows portproxy) → WSL:5170 → 이 컨테이너
+services:
+  realtime:
+    build: .
+    image: bola-realtime:latest
+    container_name: bola-realtime
+    restart: unless-stopped
+    volumes:
+      - ./:/app:ro             # realtime.py, common.py, ledger.json, certs/, .env
+    ports:
+      - "5170:5170"

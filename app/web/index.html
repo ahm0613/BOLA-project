@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BOLA Shop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page wrap">
+    <div class="cat-row" id="cats" style="margin-top:0"></div>
+
+    <div class="section-title"><h2>오늘의 추천</h2><a class="small" href="/products.html?sort=popular">전체 보기</a></div>
+    <div class="grid" id="best"></div>
+
+    <div class="section-title"><h2>지금 할인 중</h2><a class="small" href="/products.html">전체 보기</a></div>
+    <div class="grid" id="sale"></div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    const CAT_ICON = { 1: 'monitor', 2: 'kettle', 3: 'sweatshirt', 4: 'tangerine', 5: 'cream' };
+
+    (async () => {
+      const [cats, best, all] = await Promise.all([
+        pub('/categories'),
+        pub('/products?sort=popular&limit=8'),
+        pub('/products?sort=price_desc&limit=60'),
+      ]);
+      document.getElementById('cats').append(...cats.map((c) =>
+        el('a', { class: 'cat-card', href: `/products.html?category=${c.id}` },
+          el('img', { src: imgSrc(CAT_ICON[c.id]), alt: '' }),
+          el('div', {}, el('b', {}, c.name), el('span', { class: 'small' }, `상품 ${c.product_count}개`)))));
+      document.getElementById('best').append(...best.map(productCard));
+      document.getElementById('sale').append(...all.filter((p) => p.sale_price).slice(0, 4).map(productCard));
+    })().catch((ex) => toast(errorText(ex)));
+  </script>
+</body>
+</html>

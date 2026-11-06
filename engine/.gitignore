@@ -1,0 +1,10 @@
+.env
+__pycache__/
+certs/server.key
+confirmed.json
+confirmed.json.tmp
+confirmed1.json
+ledger_v2_backup.json
+ledger_v3.json
+ledger_days/
+data/

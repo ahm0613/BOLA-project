@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>로그인 | BOLA Shop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page wrap">
+    <div class="login-box panel">
+      <h1>로그인</h1>
+      <form id="login-form">
+        <label class="field"><span>아이디</span><input type="text" name="username" autocomplete="username" required></label>
+        <label class="field"><span>비밀번호</span><input type="password" name="password" autocomplete="current-password" required></label>
+        <button class="btn dark block" type="submit">로그인</button>
+        <p id="error" class="error" hidden></p>
+      </form>
+      <p class="small" style="text-align:center;margin-top:18px">아이디 찾기 · 비밀번호 찾기 · 회원가입</p>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    // 로그인 뒤 돌아갈 곳: 같은 사이트 안의 경로만 허용
+    const next = params.get('next');
+    const goNext = () => { location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/'; };
+    if (session.get()) goNext();
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      document.getElementById('error').hidden = true;
+      try {
+        await login(f.username.value.trim(), f.password.value);
+        goNext();
+      } catch (ex) {
+        showError(ex);
+      }
+    });
+  </script>
+</body>
+</html>

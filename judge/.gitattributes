@@ -1,0 +1,2 @@
+# 컨테이너 안에서 실행되는 셸 스크립트는 LF 줄바꿈이어야 함 (CRLF면 "not found" 오류)
+*.sh text eol=lf
