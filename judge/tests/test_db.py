@@ -199,5 +199,105 @@ class RecordDbTest(unittest.TestCase):
         self.assertEqual((r["decision"], r["risk_score"], r["user_status"]), ("ignored", None, "normal"))
 
 
+class FakeRedis:
+    """XRANGE만 흉내: 스트림 ID 순서대로, min 이상"""
+    def __init__(self, rows):
+        self.rows = rows
+
+    def xrange(self, stream, min="-", max="+", count=None):
+        lo = (0, 0) if min == "-" else judge.id_key(min)
+        out = [(i, f) for i, f in self.rows if judge.id_key(i) >= lo]
+        return out[:count] if count else out
+
+
+class RestoreTest(unittest.TestCase):
+    """점수 복원: bola_events 행 → 같은 점수, DB에 다시 쓰지 않음, Redis는 DB 이후만 보충"""
+    def make(self, window_sec=0):
+        """Redis·PostgreSQL 없이 Server (파일은 임시 폴더, 차단 꺼짐)"""
+        judge.load_env()
+        cfg = pin(judge.load_config())
+        tmp = tempfile.mkdtemp()
+        cfg["paths"].update({k: os.path.join(tmp, f"{k}.out") for k in cfg["paths"]})
+        cfg["db"] = {**cfg.get("db", {}), "enabled": False, "restore": True}
+        cfg["block"] = {"enabled": False}
+        cfg["window_sec"] = window_sec
+        srv = judge.Server(cfg)
+        srv.db = RecorderStub()
+        return srv
+
+    def fields(self, s, uri, owner, kind="BOLA", user="7"):
+        """realtime.py 모양 이벤트. s일 뒤"""
+        t = 1793331593000 + s * 86400 * 1000
+        return f"{t + 50}-0", {"kind": kind, "user_id": user, "api": "GET /members/{id}", "uri": uri,
+                               "status": "200", "request_id": f"rid-{s}", "started_at": str(t),
+                               "detail": f"요청자 {user} -> x (주인 {owner})"}
+
+    def as_db_rows(self, recorded):
+        """record_db가 만든 행 → DB에서 읽힌 모양 (detection_reasons는 JSONB라 dict 그대로)"""
+        return [dict(r) for r in recorded if r["stream_id"][0].isdigit()]
+
+    def patch_db(self, rows, fail=False):
+        """db.read_events·dsn_from_env를 가짜로 바꾸고 테스트 끝나면 되돌림"""
+        old = db.read_events, db.dsn_from_env
+
+        def read(dsn, since=None):
+            for r in rows:
+                if since is None or r["detected_at"] >= since:
+                    yield db.row_to_event(r)
+            if fail:
+                raise RuntimeError("DB 꺼짐")
+        db.read_events, db.dsn_from_env = read, lambda: "fake"
+        self.addCleanup(lambda: setattr(db, "read_events", old[0]) or setattr(db, "dsn_from_env", old[1]))
+
+    def test_row_to_event_roundtrip(self):
+        """record_db가 쓴 행을 되돌리면 Redis 필드와 같음 (started_at ms 그대로)"""
+        a = self.make()
+        sid, f = self.fields(0, "/members/3", "3")
+        a.handle(sid, f)
+        sid2, f2, state = db.row_to_event(self.as_db_rows(a.db.events)[0])
+        self.assertEqual((sid2, f2), (sid, f))
+        self.assertEqual(state[0], "watch")
+
+    def test_restore_from_db_then_redis(self):
+        """DB 두 건(30일 간격) + DB에 아직 없는 Redis 한 건 → 누적 100점 확정, DB 복원분은 다시 쓰지 않음"""
+        a = self.make()
+        ev1, ev2, ev3 = self.fields(0, "/members/3", "3"), self.fields(30, "/members/4", "4"), \
+            self.fields(31, "/members/5", "5")
+        a.handle(*ev1)
+        a.handle(*ev2)
+        rows = self.as_db_rows(a.db.events)             # 80점까지 DB에 기록됨, ev3은 DB에 쓰기 전에 꺼졌다고 침
+
+        b = self.make()
+        self.patch_db(rows)
+        b.r = FakeRedis([ev1, ev2, ev3])                # Redis에는 셋 다 (앞 두 건은 DB와 겹침)
+        self.assertEqual(b.rebuild_db(), 2)
+        self.assertEqual(b.db.events, [])               # DB에서 읽은 것은 다시 쓰지 않음
+        self.assertEqual(b.judge.scores["7"], 80)
+        self.assertEqual(b.user_state["7"], (rows[-1]["user_status"], rows[-1]["user_status_updated_at"]))
+        self.assertEqual(b.rebuild(), 1)                # Redis에서는 DB 이후 한 건만
+        self.assertIn("7", b.store.users)               # 40+40+40 + 피해자 3명 30 → 확정
+        self.assertEqual([r["stream_id"] for r in b.db.events], [ev3[0]])   # 보충분만 DB에 씀
+
+    def test_window_limits_db_restore(self):
+        """window_sec=86400이면 DB에서도 최근 24시간만 읽음 (여기서는 전부 오래됨 → 0건, Redis도 범위 밖)"""
+        a = self.make()
+        a.handle(*self.fields(0, "/members/3", "3"))
+        b = self.make(window_sec=86400)
+        self.patch_db(self.as_db_rows(a.db.events))
+        b.r = FakeRedis([])
+        self.assertEqual(b.rebuild_db(), 0)
+        self.assertEqual(b.rebuild(), 0)
+
+    def test_db_failure_falls_back_to_redis(self):
+        """DB를 못 읽으면 None → Redis 전체로 복원"""
+        b = self.make()
+        self.patch_db([], fail=True)
+        ev1 = self.fields(0, "/members/3", "3")
+        b.r = FakeRedis([ev1])
+        self.assertIsNone(b.rebuild_db())
+        self.assertEqual(b.rebuild(), 1)
+        self.assertEqual(b.judge.scores["7"], 40)
+
+
 if __name__ == "__main__":
     unittest.main()

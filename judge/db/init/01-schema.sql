@@ -16,7 +16,7 @@ CREATE TABLE bola_events (
   detection_reasons      JSONB NOT NULL,       -- 탐지 근거: detail(장부 비교 결과) + 판단 서버 분류·점수·피해자
 
   -- 판단 서버 (이 이벤트까지 반영한 그 시점의 값)
-  risk_score             INT,                  -- 위험도 점수 (24시간 합계). 판단 서버 시작 전에 확정된 사용자는 NULL
+  risk_score             INT,                  -- 위험도 점수 (config.json window_sec 동안의 합계, 0이면 전체 누적). 판단 서버 시작 전에 확정된 사용자는 NULL
   assessed_at            TIMESTAMPTZ NOT NULL, -- 위험도 산정 시각
   decision               TEXT NOT NULL,        -- normal / watch / warning / attack / ignored(본인 번호 오탐)
   decision_reason        TEXT NOT NULL,        -- 최종 판단 근거

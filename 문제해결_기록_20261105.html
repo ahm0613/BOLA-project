@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>문제 해결 기록</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #ffffff; --text: #1d1d1b; --muted: #66665f; --line: #e2e1dc;
+    --accent: #2f5fb3; --ok: #2e7d4f; --ok-bg: #e7f3ec; --warn: #a3620a; --warn-bg: #fbf0dd;
+    --bad: #b3362f; --bad-bg: #f9e4e2; --info: #5b4fb0; --info-bg: #ecebf9; --code-bg: #f0efea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161615; --surface: #20201e; --text: #ecebe6; --muted: #a3a29b; --line: #34332f;
+      --accent: #7fa6ec; --ok: #74c69a; --ok-bg: #1d3327; --warn: #e3ae5c; --warn-bg: #3a2c15;
+      --bad: #ee8a83; --bad-bg: #3d1f1d; --info: #b2a9f0; --info-bg: #2a2742; --code-bg: #2a2a27;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161615; --surface: #20201e; --text: #ecebe6; --muted: #a3a29b; --line: #34332f;
+    --accent: #7fa6ec; --ok: #74c69a; --ok-bg: #1d3327; --warn: #e3ae5c; --warn-bg: #3a2c15;
+    --bad: #ee8a83; --bad-bg: #3d1f1d; --info: #b2a9f0; --info-bg: #2a2742; --code-bg: #2a2a27;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.7 "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif; }
+  main { max-width: 940px; margin: 0 auto; padding: 40px 16px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.02em; }
+  h2 { font-size: 21px; margin: 52px 0 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); scroll-margin-top: 16px; }
+  h3 { font-size: 15.5px; margin: 0; }
+  p { margin: 0 0 10px; }
+  .sub { color: var(--muted); margin-bottom: 22px; }
+  .lead { color: var(--muted); margin: 0 0 16px; font-size: 14px; }
+  code { font-family: Consolas, "D2Coding", ui-monospace, monospace; font-size: 12.5px;
+         background: var(--code-bg); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto;
+        font: 13px/1.6 Consolas, "D2Coding", ui-monospace, monospace; margin: 8px 0 0; }
+  pre code { background: none; padding: 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 18px 0 10px; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .stat b { display: block; font-size: 26px; line-height: 1.2; }
+  .stat span { color: var(--muted); font-size: 13px; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
+  nav.toc a { color: var(--accent); text-decoration: none; font-size: 13.5px; padding: 4px 10px;
+              border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+  nav.toc a:hover { border-color: var(--accent); }
+  .item { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin-bottom: 10px; }
+  .item-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; margin-bottom: 6px; }
+  .item-head .when { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .item-head h3 { flex: 1 1 260px; }
+  .row { display: grid; grid-template-columns: 44px 1fr; gap: 8px; margin: 3px 0; font-size: 14px; }
+  .row > em { font-style: normal; font-weight: 600; color: var(--muted); font-size: 12.5px; padding-top: 1px; }
+  .tag { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .t-ok { color: var(--ok); background: var(--ok-bg); }
+  .t-warn { color: var(--warn); background: var(--warn-bg); }
+  .t-bad { color: var(--bad); background: var(--bad-bg); }
+  .t-info { color: var(--info); background: var(--info-bg); }
+  .changes { margin: 14px 0 0; padding: 12px 16px; background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; font-size: 14px; }
+  .changes b { font-size: 13px; color: var(--muted); }
+  .changes ul { margin: 6px 0 0; padding-left: 20px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; background: var(--bg); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  .timeline { list-style: none; padding: 0; margin: 0; border-left: 2px solid var(--line); }
+  .timeline li { position: relative; padding: 0 0 16px 20px; font-size: 14px; }
+  .timeline li::before { content: ""; position: absolute; left: -7px; top: 7px; width: 12px; height: 12px;
+                         border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); }
+  .timeline .when { display: block; color: var(--muted); font-size: 12.5px; }
+  .note { border-left: 3px solid var(--accent); padding: 10px 14px; background: var(--surface); border-radius: 0 8px 8px 0; color: var(--muted); font-size: 14px; }
+  ul.plain { margin: 6px 0 0; padding-left: 20px; }
+  ul.plain li { margin: 3px 0; }
+  @media (max-width: 560px) {
+    h1 { font-size: 23px; }
+    .row { grid-template-columns: 1fr; gap: 0; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>문제 해결 기록</h1>
+  <p class="sub">BOLA 탐지·판단 시스템을 만들며 겪은 문제, 해결 방법, 변경 사항 · 2026-10-29 ~ 2026-11-05 · 2026-11-05 작성</p>
+
+  <div class="note">
+    출처: <code>C:\Users\sesac\.claude\projects\D--python-rule\</code>의 대화 파일 11개(이어진 세션을 묶으면 6개 묶음)와 git 커밋 기록입니다.
+    대화 파일의 시각은 UTC라서 한국 시각(KST)으로 바꿔 적었습니다. 사용자와 Claude가 쓴 글만 뽑아 읽었고, 긴 메시지는 앞부분만 읽었기 때문에 세부 내용이 빠졌을 수 있습니다.
+    단순 설명 요청은 빼고, 오류·버그·설계 변경·정정만 담았습니다.
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b>6일</b><span>대화한 날 (10/29~11/05)</span></div>
+    <div class="stat"><b>65건</b><span>겪은 문제와 정정</span></div>
+    <div class="stat"><b>10건</b><span>사용자 정정 (Claude 실수 2건 별도)</span></div>
+    <div class="stat"><b>6개</b><span>git 커밋</span></div>
+    <div class="stat"><b>9건</b><span>아직 남아 있는 문제</span></div>
+  </div>
+
+  <nav class="toc">
+    <a href="#d1029">10/29</a><a href="#d1030">10/30</a><a href="#d1102">11/02</a><a href="#d1103">11/03</a>
+    <a href="#d1104a">11/04 오전</a><a href="#d1104b">11/04 오후~11/05</a><a href="#open">남은 문제</a>
+    <a href="#rules">정해진 규칙</a><a href="#commits">git 커밋</a>
+  </nav>
+
+  <!-- ============================================================ 10/29 -->
+  <h2 id="d1029">10/29 · bola-rule을 Wazuh Indexer에 연결, judge-server 추가</h2>
+  <p class="lead">09:06~18:38. Python 룰 엔진(bola-rule)을 학원 Wazuh Indexer(<code>bola-api-*</code>)에 연결하고, R5·R6 룰과 점수 판단 서버를 추가해 GitHub <code>python-engin</code> 브랜치에 올렸습니다.</p>
+
+  <div class="item"><div class="item-head"><span class="when">09:15</span><h3>시간 필드와 인덱스 이름 불일치</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>인덱스에는 <code>@timestamp</code>가 없고 <code>timestamp</code>만 있었습니다. 설정의 인덱스 이름도 <code>wazuh-api-*</code>로 틀렸습니다.</div></div>
+    <div class="row"><em>해결</em><div><code>sources.py</code>를 <code>timestamp</code>·<code>request_id</code> 정렬로 바꾸고 인덱스를 <code>bola-api-*</code>로 바꿨습니다. TLS는 <code>wazuh.indexer</code> 이름으로 검사하게 했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11:41</span><h3>BOLA-APP/engine을 "프로토타입"이라고 부름</h3><span class="tag t-info">사용자 정정</span></div>
+    <div class="row"><em>해결</em><div>"트래픽 학습 엔진"이 맞다고 고쳤습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">13:23</span><h3>설계 그림과 설명이 어긋남</h3><span class="tag t-ok">정리</span></div>
+    <div class="row"><em>원인</em><div>탐지 엔진이 Redis로 직접 차단하는지, 판단 서버가 NestJS인지 Python인지, 같은 위반을 두 경로로 처리하는지가 정리되지 않았습니다.</div></div>
+    <div class="row"><em>해결</em><div>판단 서버가 임시·영구 차단을 모두 맡기로 정리했습니다. 영구 차단에도 Redis 키가 필요하다고 바로잡았습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">13:55</span><h3>GitHub에 커밋 작성자가 다른 계정(wogusckrgo11-spec)으로 표시됨</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>Claude가 커밋에 gmail 주소를 넣었습니다.</div></div>
+    <div class="row"><em>해결</em><div>noreply 주소로 커밋 두 개를 다시 쓰고 <code>--force-with-lease</code>로 푸시했습니다. 메모리에도 기록했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:52</span><h3>체크포인트 시각을 15:11:21로 잘못 안내함</h3><span class="tag t-info">Claude 실수</span></div>
+    <div class="row"><em>해결</em><div>14:51:21로 바로잡았습니다. 14:53의 "로그가 안 쌓인다"는 의문은 체크포인트 이후 새 로그가 없어서 생긴 정상 동작이었습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:57</span><h3>위반 날짜가 29일로 찍혀 보임</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>그 값은 탐지 시각(<code>detected_at</code>)이었습니다.</div></div>
+    <div class="row"><em>해결</em><div>요청 시각 <code>event_time</code> 필드를 추가했습니다 (<code>rules.py</code>).</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">16:17</span><h3>수집이 약 20초 늦음 + 질문을 잘못 이해함</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>Indexer 조회 주기가 10초였습니다. Claude는 Indexer 조회 간격을 물은 질문에 Kong API 호출 간격으로 답했습니다 (사용자 정정).</div></div>
+    <div class="row"><em>해결</em><div><code>poll_interval_sec</code>를 10초에서 1초로, judge는 <code>--watch 1</code>로 바꿨습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">17:32</span><h3>Docker가 설치되어 있지 않아 빌드를 검증할 수 없음</h3><span class="tag t-warn">검증 못 함</span></div>
+    <div class="row"><em>해결</em><div>Dockerfile만 작성했습니다. 다음 날 WSL Docker로 옮겼습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">18:30</span><h3>GitHub 구조 문제: judge-server가 bola-rule 안에 들어가 경로가 맞지 않음</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div><code>bola-rule/</code>와 <code>judge-server/</code> 두 폴더로 나누고 루트 README를 추가했습니다 (340fdb9).</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">18:36</span><h3>가짜 데이터가 GitHub에는 남아 있는데 README에는 "비어 있음"</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>로컬에서만 지웠습니다.</div></div>
+    <div class="row"><em>해결</em><div>GitHub에서도 지웠습니다 (aca6972). git 이력에는 남아 있습니다.</div></div></div>
+
+  <div class="changes"><b>이날 바꾼 것</b><ul>
+    <li><code>sources.py</code>, <code>event.py</code>, <code>config.py</code>, <code>main.py</code>, <code>config.yaml</code>: Indexer 연동</li>
+    <li><code>rules.py</code>: R5(경로 주인 불일치), R6(순차 ID 탐색), <code>event_time</code></li>
+    <li>날짜별 <code>violations-YYYY-MM-DD.jsonl</code> 저장, 문서를 <code>docs/</code>로 이동, docstring 102개</li>
+    <li><code>judge-server/</code> 신규: 룰별 점수 R1 30, R2 30, R3 10, R4 100, R5 30, R6 20</li>
+    <li>두 폴더의 Dockerfile, <code>docker-compose.yml</code></li>
+  </ul></div>
+
+  <!-- ============================================================ 10/30 -->
+  <h2 id="d1030">10/30 · Fluent Bit 실시간 탐지와 판단 서버(judge), DB·Docker 구성</h2>
+  <p class="lead">09:23~19:05. Kong 로그 수집을 Wazuh 대신 Fluent Bit(mTLS 5170) → <code>realtime.py</code>로 바꾸고, Redis <code>bola:events</code>를 채점하는 판단 서버를 만들었습니다. PostgreSQL, 컨테이너 3개, 로그온 자동 시작까지 구성했습니다.</p>
+
+  <div class="item"><div class="item-head"><span class="when">10:48</span><h3>로그가 들어오지 않음 (5170 Listen, 연결 0개)</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>인증서 SAN과 Fluent Bit 대상 IP가 다른 것으로 추정했습니다. <code>realtime.py</code>가 연결 실패를 출력하지 않아 원인을 찾기 어려웠습니다.</div></div>
+    <div class="row"><em>해결</em><div>11:18에 사용자가 수신을 확인했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11:25</span><h3><code>server.key</code> FileNotFoundError</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>인증서를 상대 경로로 열어서 실행한 폴더 기준으로 찾았습니다.</div></div>
+    <div class="row"><em>해결</em><div><code>BASE_DIR</code> 기준 절대 경로로 바꿨습니다 (<code>realtime.py</code>). 비밀번호도 <code>.env</code>에서 읽게 했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11:34</span><h3><code>judges</code> 그룹 소비자 0명, 이벤트 8건이 전달되지 않음</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>판단 서버가 아직 없었습니다.</div></div>
+    <div class="row"><em>해결</em><div>판단 서버(<code>judge.py</code>, <code>scoring.py</code>, <code>store.py</code>)를 만들었습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11:34</span><h3>장부 오염: <code>/members/4</code>의 주인이 43으로 학습됨</h3><span class="tag t-warn">일부 해결</span></div>
+    <div class="row"><em>원인</em><div>방문 기록으로 주인을 추정하는 학습 방식 때문입니다.</div></div>
+    <div class="row"><em>해결</em><div>판단 서버에서 URL 번호가 본인이면 점수를 주지 않게 하고, <code>confirmed.json</code>으로 공격 요청을 학습에서 빼게 했습니다. <code>realtime.py</code>의 RATE 오차단 가능성은 남았습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">13:07 · 13:25</span><h3>엉뚱한 "3번"을 설명함 / <code>[BOLA]</code> 출력을 Fluent Bit 로그로 착각함</h3><span class="tag t-info">정정</span></div>
+    <div class="row"><em>해결</em><div>다시 설명했습니다. <code>[BOLA]</code> 출력은 Fluent Bit 로그가 아니라 <code>realtime.py</code>의 판정 결과입니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:16 ~ 15:10</span><h3><code>confirmed.json</code> 형식 불일치 + 너무 많이 바꾼 수정</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div><code>ledger_v2.py</code>는 <code>{rid: 날짜}</code>를 기대했는데 판단 서버는 <code>{requests, users}</code>로 썼습니다.</div></div>
+    <div class="row"><em>해결</em><div>14:48에 고쳤지만 사용자가 "뭔가 많이 바뀐 것 같다"며 되돌려 달라고 했습니다. 원래대로 돌린 뒤 15:10에 필요한 부분만 다시 고쳤습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:24</span><h3>테스트 helper·sed·<code>--dry-run</code> 오류</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>테스트 helper가 API 이름에 원본 URI를 넣었고, sed가 정규식 이스케이프를 망가뜨렸고, <code>--dry-run</code>인데 파일을 썼습니다.</div></div>
+    <div class="row"><em>해결</em><div>각각 고쳤습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">15:14</span><h3><code>ledger_v2.py</code> 실행 불가 (<code>common.py</code>, <code>access_fake.json</code> 없음)</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div><code>fluent-bit/</code>로 옮겼습니다. 학습에 쓸 로그는 이때 정하지 않았습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">15:40 → 15:55</span><h3>100점 이후에도 점수를 계속 계산하게 바꿈</h3><span class="tag t-info">사용자 요청으로 원복</span></div>
+    <div class="row"><em>결정</em><div>확정된 뒤에는 점수 계산을 멈추기로 했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">16:40</span><h3>PowerShell이 <code>$(...)</code>를 먼저 해석함</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div>Bash로 다시 실행했습니다. 이후 11/04에도 같은 따옴표 문제가 반복됐습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">16:43</span><h3>pc3가 DB에 접속하지 못함</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>WSL이 NAT 뒤에 있어 바깥에서 접속할 수 없었습니다.</div></div>
+    <div class="row"><em>해결</em><div>portproxy와 방화벽 규칙을 추가하고(<code>wsl-portproxy.ps1</code>), pc3(192.168.0.26)만 허용했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">17:33</span><h3><code>event_id</code>(request_id)가 중복됨 (476행 중 469개)</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div>Redis <code>stream_id</code>를 기본 키로 썼습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">19:02</span><h3>포트 전달은 성공했는데 <code>startup.log</code>에 "실패"로 찍힘</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>명령 출력을 버리는 방식 때문에 결과를 잘못 판단했습니다.</div></div>
+    <div class="row"><em>해결</em><div>출력을 직접 받아서 판정하게 바꿨습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">19:05</span><h3>컨테이너가 <code>Exited (137)</code>로 끝남</h3><span class="tag t-warn">미적용</span></div>
+    <div class="row"><em>원인</em><div>SIGTERM에 반응하지 않아 강제 종료됐습니다.</div></div>
+    <div class="row"><em>제안</em><div><code>stop_signal: SIGINT</code>를 제안했고 적용하지 않았습니다.</div></div></div>
+
+  <div class="changes"><b>이날 바꾼 것</b><ul>
+    <li><code>judge/</code> 신규: <code>judge.py</code>, <code>scoring.py</code>, <code>store.py</code>, <code>db.py</code>, <code>config.json</code>, 테스트, 점수 로그·털린 API·확정 근거 기록</li>
+    <li><code>fluent-bit/realtime.py</code>: 인증서 경로 수정, 비밀번호를 <code>.env</code>에서 읽음</li>
+    <li><code>ledger_v2.py</code>, <code>confirmed.json</code>을 <code>fluent-bit/</code>로 옮김</li>
+    <li>DB <code>bola_events</code>, <code>user_status</code>, 계정 <code>judge</code>와 읽기 전용 <code>dashboard</code></li>
+    <li>루트 compose(bola-realtime, bola-judge, judge-postgres), 자동 시작 스크립트</li>
+    <li>비밀번호가 들어 있던 <code>testtest.py</code> 삭제, 예전 <code>bola-rule</code>·<code>judge-server</code> 삭제</li>
+  </ul></div>
+
+  <!-- ============================================================ 11/02 -->
+  <h2 id="d1102">11/02 · 대시보드 DB 모듈, 영구 차단, 2단계 장부 학습</h2>
+  <p class="lead">10:05~19:03. pc3용 DB 조회 모듈을 만들고, 판단 서버에 Redis 영구 차단을 넣었습니다. pc2 앱이 바뀌어 데이터를 초기화했고, 2단계 장부 학습(<code>ledger_v3.py</code>)을 만들어 올렸습니다.</p>
+
+  <div class="item"><div class="item-head"><span class="when">10:20</span><h3>대시보드 견본 파일에 실제 비밀번호가 들어 있음</h3><span class="tag t-bad">미해결</span></div>
+    <div class="row"><em>내용</em><div><code>dashboard/.streamlit/secrets.toml.example</code>에 실제 비밀번호가 들어 있었습니다. 처리 방법은 결정하지 않았습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">10:23</span><h3>일부 컬럼만 조회함 → DB 전체를 가져가야 함</h3><span class="tag t-info">사용자 정정</span></div>
+    <div class="row"><em>해결</em><div><code>read_all</code>, <code>tables</code>, <code>read_table</code>, <code>all_*</code>를 추가했습니다 (<code>dashboard/bola_db.py</code>).</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11:14</span><h3>BOLA_Insight_v2_Docker 점검</h3><span class="tag t-warn">안내만 함</span></div>
+    <div class="row"><em>내용</em><div>비밀번호가 이미지에 들어감, 실수로 생긴 <code>BOLA_DB_HOST=192.168.0.40.txt</code> 파일, <code>use_container_width</code>를 <code>width="stretch"</code>로 바꿔야 함. 고칠 곳을 안내만 했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11:31</span><h3><code>user_status.risk_score</code>가 NULL</h3><span class="tag t-ok">정상 동작</span></div>
+    <div class="row"><em>원인</em><div>판단 서버를 다시 시작하기 전에 확정된 사용자는 점수를 다시 계산하지 않습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">13:37 → 14:12</span><h3>공격자로 확정돼도 차단되지 않음</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>judge가 확정을 기록만 하고 차단은 하지 않았습니다.</div></div>
+    <div class="row"><em>해결</em><div>Redis <code>blocked:user:&lt;id&gt;</code> 영구 차단(<code>blocker.py</code>), 해제 도구(<code>unblock.py</code>)를 만들었습니다. 테스트 32개가 통과했습니다. <code>realtime.py</code>의 RATE 임시 차단에는 <code>nx=True</code>를 넣어 영구 차단 키를 덮어쓰지 않게 했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:00</span><h3>Kong이 Redis 비밀번호를 쓰지 않음 (<code>kong.yml</code>에 <code>red:auth</code> 없음)</h3><span class="tag t-bad">미해결 (pc2 확인 필요)</span></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:28</span><h3>pc2 앱을 새로 구성해 정상 사용자가 차단될 위험</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>예전 장부가 남아 있고 사용자 번호가 다시 쓰였습니다.</div></div>
+    <div class="row"><em>해결</em><div>장부를 다시 학습하고, 사용자 1·2·3을 해제하고, DB와 로그를 보관한 뒤 초기화했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:33</span><h3><code>access_fake.json</code>으로 학습할 수 없음</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>파일이 없었고(FileNotFoundError), 날짜가 학습 기간 밖이었습니다.</div></div>
+    <div class="row"><em>해결</em><div>pc2에서 다시 만들었습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">15:16 · 15:30</span><h3>폴더 이동 <code>Permission denied</code> / <code>no configuration file provided: not found</code></h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div>robocopy로 옮겼습니다. compose 오류는 compose 파일이 없는 폴더에서 실행해서 생겼고, <code>cd /mnt/d/python-rule</code> 또는 <code>-f</code>로 해결했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">16:43</span><h3>질문했는데 Claude가 수정부터 시작함</h3><span class="tag t-info">사용자 정정</span></div>
+    <div class="row"><em>해결</em><div>"물어본 거야"라는 말에 수정하지 않고 답만 했습니다 (1차 장부와 <code>ledger_days</code>의 객체 62개 차이).</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">17:07</span><h3>새 <code>ledger_v2.py</code>에서 <code>TypeError: unhashable type: 'list'</code></h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div><code>confirmed.json</code> 형식(<code>requests</code>/<code>users</code>)이 코드가 기대하는 것과 달랐습니다.</div></div>
+    <div class="row"><em>해결</em><div>형식에 맞게 고쳐 실행했습니다. <code>ledger.json</code>은 사용자가 일부러 지운 것이었습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">18:00</span><h3><code>access_fake.json</code>을 가짜 데이터로 취급함</h3><span class="tag t-info">사용자 정정</span></div>
+    <div class="row"><em>내용</em><div>설치 전 실제 이력이므로 그 안의 BOLA 사용자도 차단 대상이라고 바로잡았습니다. <code>import_confirmed.py</code>를 만들고 dry-run만 실행했습니다. 이 파일은 11/04에 지웠습니다.</div></div></div>
+
+  <div class="changes"><b>이날 바꾼 것</b><ul>
+    <li><code>dashboard/bola_db.py</code> (pc3 전달용)</li>
+    <li><code>judge/blocker.py</code>, <code>unblock.py</code>, <code>import_confirmed.py</code>, <code>tests/test_block.py</code> 신규</li>
+    <li><code>ledger_v2.py</code>: 판단 서버의 <code>confirmed.json</code> 형식에 맞춤 / <code>ledger_v3.py</code> 신규</li>
+    <li><code>OVERVIEW.md</code>, <code>1.md</code>, <code>2.md</code> 작성, 커밋 2327336</li>
+  </ul></div>
+
+  <!-- ============================================================ 11/03 -->
+  <h2 id="d1103">11/03 · Slack 알림, ledger_v3 재설계, 공격 시뮬레이터</h2>
+  <p class="lead">09:26~20:05. Slack 알림을 새로 만들고, <code>ledger_v3.py</code>와 <code>ledger_v2.py</code>의 역할을 다시 정했습니다. 공격 시뮬레이터를 만들고, 대시보드 차단 숫자 문제를 추적했습니다.</p>
+
+  <div class="item"><div class="item-head"><span class="when">10:42 ~ 10:53</span><h3>Slack 앱 생성 실패</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>"From scratch" 메뉴가 없었고, manifest의 scope와 한글 봇 이름이 거부됐습니다.</div></div>
+    <div class="row"><em>해결</em><div>영문 봇 이름(<code>bola-alert</code>)과 Incoming Webhooks로 만들고, 웹훅 두 개를 <code>.env</code>에 넣었습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11:48</span><h3>Claude가 계속 B안(DB·Slack 기록 포함)을 추천함</h3><span class="tag t-info">사용자 정정</span></div>
+    <div class="row"><em>해결</em><div>"A가 제일 간단한데 왜?"라는 말에 A안을 택했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">13:10 ~ 13:18</span><h3>사용자가 고친 <code>ledger_v2.py</code>가 멈춤 + <code>ledger.json</code>·<code>ledger_days</code>가 사라짐</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div><code>load_confirmed()</code>가 <code>{rid: 날짜}</code>를 기대했는데 실제 형식은 <code>{requests, users, released}</code>였습니다 (<code>TypeError: unhashable type: 'list'</code>).</div></div>
+    <div class="row"><em>해결</em><div>세 함수를 실제 형식에 맞게 다시 고쳤습니다. 장부는 <code>ledger_v2.py</code>를 다시 실행해 만들었습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:50</span><h3><code>simulate.py</code> 로그인이 405</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>NGINX는 <code>/api/</code>만 Kong으로 넘기는데 URL에 <code>/api</code>가 빠져 있었습니다.</div></div>
+    <div class="row"><em>해결</em><div><code>DEFAULT_URL</code>을 <code>https://192.168.0.39/api</code>로 바꿨습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">15:11</span><h3>"3건이면 100점인데 왜 BOLA 29건이 통과했나"</h3><span class="tag t-ok">정상 동작</span></div>
+    <div class="row"><em>원인</em><div>burst 패턴은 요청을 비동기로 한꺼번에 보내서, 차단 키가 걸리기 전에 요청이 먼저 통과합니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">16:17</span><h3>"앱에서 소유권을 검사해 BOLA를 막으라"는 일반론</h3><span class="tag t-info">사용자 정정</span></div>
+    <div class="row"><em>해결</em><div>앱에서 BOLA를 없애면 탐지 주제가 무의미해지므로, 테스트 앱은 일부러 취약하게 두기로 했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">16:11 ~ 17:04</span><h3>대시보드에 차단 숫자가 나오지 않음</h3><span class="tag t-warn">수정안만 제시</span></div>
+    <div class="row"><em>원인</em><div><code>app.py</code>는 <code>temporarily_blocked</code>/<code>blocked</code>를 기대하는데 판단 서버는 <code>confirmed</code>·<code>RATE</code>를 씁니다. 영구 차단은 "확인 불가"로 고정되어 있었습니다.</div></div>
+    <div class="row"><em>해결</em><div>confirmed를 세도록 고치는 수정안을 냈습니다. 11/04 오전에도 같은 문제가 다시 나왔습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">16:53</span><h3><code>config.json</code>에서 BOLA를 1점으로 바꿨는데 반영되지 않음</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div><code>config.json</code>은 시작할 때 한 번만 읽습니다.</div></div>
+    <div class="row"><em>해결</em><div>재시작해서 반영했습니다. BOLA 1점이 UNKNOWN 10점보다 낮아지는 역전 문제를 알렸습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">20:03</span><h3>Redis 정리 실패 (TimeoutError)</h3><span class="tag t-warn">보류</span></div>
+    <div class="row"><em>원인</em><div>pc2 전원이 꺼져 있었습니다.</div></div>
+    <div class="row"><em>해결</em><div>pc1만 정리하고 Redis는 pc2를 켠 뒤로 미뤘습니다. GitHub 업로드도 민감 파일 제외 설정이 끝나지 않아 사용자가 멈췄습니다.</div></div></div>
+
+  <div class="changes"><b>이날 바꾼 것</b><ul>
+    <li><code>judge/notifier.py</code> 신규 (큐+스레드, <code>alerts</code> 테이블로 중복 방지, 재시도, 1시간 요약), <code>db.py</code>·<code>judge.py</code> 연동</li>
+    <li><code>ledger_v3.py</code>: 2차 학습·<code>confirmed1.json</code> 제거, <code>confirmed.json</code>에 바로 합침, <code>--apply</code> 대신 <code>--dry-run</code>, 판단 서버가 켜져 있으면 거부</li>
+    <li><code>realtime.py</code> (사용자가 고친 판): <code>same_object_apis</code>로 PATCH/DELETE를 GET 장부로 판정</li>
+    <li><code>judge.py</code>: 명단 동기화 때 DB(<code>SYNC</code>)와 Slack에 기록</li>
+    <li><code>attack/simulate.py</code>, <code>attack/README.md</code> 신규 (burst/steady/slow)</li>
+  </ul></div>
+
+  <!-- ============================================================ 11/04 오전 -->
+  <h2 id="d1104a">11/04 오전 · 초기화 범위, 알림, 쓰기 채점</h2>
+  <p class="lead">09:33~14:51. "db 로그 정리"의 범위를 정하고, Slack 알림을 고치고, 쓰기 요청 채점을 추가했습니다.</p>
+
+  <div class="item"><div class="item-head"><span class="when">09:33 ~ 09:40</span><h3>"db 로그 정리"를 백업부터 함</h3><span class="tag t-info">사용자 정정</span></div>
+    <div class="row"><em>해결</em><div>"백업은 안 해도 된다"는 말에 따라 백업 없이 지우도록 메모리에 저장했습니다. 백업 중 <code>POSTGRES_USER</code>가 없어 실패한 부분은 기본값 <code>postgres</code>로 해결했습니다. 남은 archive 폴더 두 개는 참조하는 곳이 없는 것을 확인한 뒤 지웠습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">09:43</span><h3>정리했는데 <code>docker compose logs</code>에 과거 로그가 보임</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div><code>stop</code>/<code>start</code>는 같은 컨테이너를 다시 쓰므로 로그가 남습니다.</div></div>
+    <div class="row"><em>해결</em><div><code>up -d --force-recreate judge</code>로 컨테이너를 새로 만들게 했습니다. <code>down -v</code>는 DB 볼륨까지 지우므로 쓰지 않습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">10:02</span><h3>10시 정각에 Slack 알림이 옴</h3><span class="tag t-ok">정상 동작</span></div>
+    <div class="row"><em>원인</em><div>매시 정각 30초 뒤에 오는 1시간 요약입니다. 이벤트가 없어도 보내며, 판단 서버가 살아 있다는 신호 역할을 합니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">10:22 ~ 10:48</span><h3>Streamlit에 "확인 불가", 제한·차단 현황 표가 비어 있음</h3><span class="tag t-warn">수정안 전달</span></div>
+    <div class="row"><em>원인</em><div>대시보드가 "현재 적용 중인 RATE 임시 차단"만 조회합니다. 그때 공격은 100점으로 바로 확정되어 RATE 행이 없었습니다.</div></div>
+    <div class="row"><em>해결</em><div><code>user_status</code>의 <code>confirmed</code>를 읽어 영구 차단도 보여 주는 수정안을 만들어 pc3에 전달하게 했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">10:53</span><h3>개발자 채널 "취약 API" 알림에 피해자 수가 들어감</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div><code>notifier.py</code>에서 피해자 줄과 <code>victims</code> 인자를 지우고 <code>--build</code>로 반영했습니다. 빌드 명령이 PowerShell 따옴표 처리 때문에 꼬여서 스크립트 파일로 실행했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">10:58 ~ 11:01</span><h3>수동으로 보낸 요약이 11:00~12:00(빈 구간)으로 나감</h3><span class="tag t-info">Claude 실수</span></div>
+    <div class="row"><em>원인</em><div>Claude가 일회용 스크립트를 "이번 정각" 기준으로 잘못 고쳤습니다. 자동 요약 코드에는 문제가 없습니다.</div></div>
+    <div class="row"><em>해결</em><div>10:00~11:00으로 고정해 다시 보냈습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11:02 ~ 11:10</span><h3>정리했는데 <code>confirmed.json</code>, <code>bola_events</code>, <code>user_status</code>가 다시 채워짐</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>Redis 스트림 <code>bola:events</code>에 과거 이벤트 29건이 남아 있었고, judge는 켜질 때 최근 24시간 이벤트를 다시 채점합니다.</div></div>
+    <pre><code>bola:events (29건 남음) → judge 재시작 → [복원] 29건 채점 → 사용자 1 다시 확정
+  → confirmed.json, bola_events, user_status, Redis 차단 키를 다시 씀</code></pre>
+    <div class="row" style="margin-top:8px"><em>해결</em><div>처음에는 Claude가 스트림 비우기를 넣었다가 "정해 준 범위만 지우라"는 말에 되돌렸습니다. 원인을 설명한 뒤 사용자 요청으로 스트림까지 비웠고, 재시작 뒤에도 0건으로 유지되는 것을 확인했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:17</span><h3>남의 객체를 수정·삭제해도 조회와 같은 점수</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div>PUT/PATCH/DELETE 성공을 <code>BOLA_PATH_WRITE</code>, <code>BOLA_LEDGER_WRITE</code>로 따로 채점하게 했습니다. 테스트 14개가 통과했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">14:22 ~ 14:40</span><h3>장부만으로 검증하려는데 BOLA_PATH가 URL로 바로 판정함</h3><span class="tag t-ok">설정으로 해결</span></div>
+    <div class="row"><em>해결</em><div><code>config.json</code>의 <code>path_owners</code>를 <code>[]</code>로 바꿨습니다. 이때 <code>ledger_v3.py</code>는 빈 목록이면 기본값으로 돌아가서 여전히 URL을 쓴다는 것을 발견했고, "나중에 정리"하기로 미뤘습니다.</div></div></div>
+
+  <!-- ============================================================ 11/04 오후 ~ 11/05 -->
+  <h2 id="d1104b">11/04 오후 ~ 11/05 · 1대1 API 자동 추론, 시뮬레이터 확장, GitHub 업로드</h2>
+  <p class="lead">11/04 14:48 ~ 11/05 13:02. 장부로 1대1 API를 추론하는 <code>api_infer.py</code>, UNKNOWN 승격, 시뮬레이터 확장, 문서 정리와 업로드, DB 조회 문제를 다뤘습니다.</p>
+
+  <div class="item"><div class="item-head"><span class="when">11-04 14:53</span><h3>"members·profiles가 1대1인 걸 어떻게 알았나?"</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>사람이 앱 소스를 보고 <code>config.json</code>에 적은 값이었고, 추론 기능은 없었습니다.</div></div>
+    <div class="row"><em>해결</em><div>장부 통계(표본 30개 이상, 일치율 95% 이상)로 추론하는 <code>api_infer.py</code>를 만들고 <code>path_owners</code>를 <code>"auto"</code>로 바꿨습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-04 15:23</span><h3><code>/members/4</code> 성공 조회가 UNKNOWN 20점으로만 잡힘</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>장부에 없는 객체는 UNKNOWN으로 오고, <code>scoring.py</code>가 그대로 두었습니다.</div></div>
+    <div class="row"><em>해결</em><div>path_owners API에서 성공한 UNKNOWN은 BOLA_PATH(쓰기면 <code>_WRITE</code>)로 올리고, 본인 번호면 0점으로 했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-04 15:26 ~ 15:36</span><h3>Redis 스트림이 정리하기 전부터 비어 있음 (3번 연속)</h3><span class="tag t-bad">원인 미조사</span></div>
+    <div class="row"><em>내용</em><div>16:21에는 9건이 정상적으로 쌓여 있었습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-04 16:04</span><h3>rotate 패턴이 피해자마다 항상 alice부터 시작함</h3><span class="tag t-info">사용자 정정</span></div>
+    <div class="row"><em>해결</em><div>원래 원한 방식대로, 계정을 alice → bob → carol 순서로 돌리고 막히면 다음 계정이 이어받게 바꿨습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-04 16:08</span><h3>rotate 요약에서 크래시</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>피해자 번호가 정수인데 Claude가 문자열로만 테스트했습니다.</div></div>
+    <div class="row"><em>해결</em><div>정렬 키를 정수 기준으로 바꿨습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-04 16:55</span><h3><code>orders/99</code>를 털었는데 "털린 API"에 주인 41이 표시됨</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div>주인 대신 접근한 객체 번호를 저장하게 했습니다 (<code>api_victims</code> → <code>api_objects</code>).</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-04 18:59 · 19:53</span><h3>README 점수표가 옛 값 / <code>test_db</code> 실패</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>문서에 옛 점수가 남아 있었습니다. Claude가 테스트 설정(<code>tests/fixed_cfg.py</code>)의 RATE를 20에서 10으로 바꿔 테스트가 깨졌습니다.</div></div>
+    <div class="row"><em>해결</em><div>문서를 고치고 테스트 설정을 20으로 되돌렸습니다 (운영 설정은 10). 테스트 64개가 모두 통과했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-04 19:57</span><h3><code>reset.sh</code> 실행이 안전장치에 막힘</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div>되돌릴 수 없는 삭제라서 스크립트만 만들고 실행은 사용자에게 맡겼습니다. 11/05부터 정리에 이 스크립트를 씁니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-04 20:01 ~ 20:10</span><h3>문서 정리와 GitHub 업로드</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>내용</em><div>OVERVIEW의 깨진 링크를 고치다가 "archive 밖 md만 정리하라"는 정정을 받았습니다. 커밋에 <code>.env.example</code> 삭제와 시뮬레이터 결과 CSV 27개가 잡혀서 되돌리고 제외했습니다. 커밋에서 Co-Authored-By 줄을 빼 달라는 요청에 amend 후 force-push했는데, GitHub 500 오류가 나서 다시 시도해 성공했습니다 (543f6b0).</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-05 10:25 · 10:38</span><h3>대시보드 쿼리의 <code>%%</code> / DBeaver에 테이블이 안 보임</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>해결</em><div>파라미터가 없는 쿼리라서 <code>%</code>로 고치게 안내했습니다. DBeaver는 Database를 <code>bola_judge</code>로 지정해 해결했습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><span class="when">11-05 12:58</span><h3>"<code>confirmed.json</code>이 정리 안 됨"</h3><span class="tag t-ok">해결</span></div>
+    <div class="row"><em>원인</em><div>디스크의 파일은 비어 있었고, 에디터가 예전 내용을 보여 주고 있었습니다.</div></div>
+    <div class="row"><em>해결</em><div>Revert File로 다시 열고, 예전 내용을 저장하지 말라고 안내했습니다.</div></div></div>
+
+  <div class="changes"><b>이 기간에 바꾼 것</b><ul>
+    <li><code>judge/api_infer.py</code> 신규, <code>judge.py</code>는 60초마다 장부가 바뀌었는지 보고 다시 추론</li>
+    <li><code>scoring.py</code>: UNKNOWN 승격, 접근한 객체 번호 저장</li>
+    <li><code>attack/simulate.py</code>: rotate, <code>--random</code>/<code>--seed</code></li>
+    <li><code>import_confirmed.py</code>, <code>1.md</code>·<code>2.md</code>·<code>3.md</code> 삭제, README·OVERVIEW 최신화</li>
+    <li><code>judge/reset.sh</code>, 루트 <code>.gitignore</code> 신규</li>
+  </ul></div>
+
+  <!-- ============================================================ 남은 문제 -->
+  <h2 id="open">아직 남아 있는 문제</h2>
+  <p class="lead">대화 기록과 현재 코드를 함께 보고 정리했습니다. A와 B는 이번 정리 중에 코드를 실행해서 직접 확인했습니다.</p>
+
+  <div class="item"><div class="item-head"><h3>A. <code>ledger_v3.py</code>가 <code>path_owners: "auto"</code>를 글자 단위로 쪼개 읽음</h3><span class="tag t-bad">버그 · 직접 확인</span></div>
+    <div class="row"><em>원인</em><div><code>path_owner_prefixes()</code>(<code>fluent-bit/ledger_v3.py:74-77</code>)가 문자열 <code>"auto"</code>를 <code>[['a'], ['u'], ['t'], ['o']]</code>로 읽습니다. 그래서 문서와 달리 <code>/members/{id}</code>도 장부로만 판정합니다.</div></div>
+    <div class="row"><em>경과</em><div>11/04 14:33에 "나중에 정리", 20:17에 "선택 과제", 11/05 11:35에 "정리가 필요한 것 하나"로 세 번 언급됐지만 고친 기록이 없습니다.</div></div></div>
+
+  <div class="item"><div class="item-head"><h3>B. <code>realtime.py</code>에 Redis 비밀번호가 코드로 들어가 있음</h3><span class="tag t-bad">보안 · 직접 확인</span></div>
+    <div class="row"><em>내용</em><div>10/30에 <code>.env</code>와 <code>BASE_DIR</code> 방식으로 바꿨는데, 지금 파일에는 <code>REDIS_PASS = "redis6379"</code>(27행)와 상대 경로 <code>LEDGER_PATH = "ledger.json"</code>(23행)가 있고 커밋 543f6b0에 들어갔습니다.</div></div>
+    <div class="row"><em>추정</em><div>대화에는 이 변경 기록이 없습니다. 11/03에 사용자가 다른 곳에서 고친 <code>realtime.py</code>(<code>same_object_apis</code> 추가)를 가져올 때 함께 들어온 것으로 보입니다.</div></div></div>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>문제</th><th>처음 나온 날</th><th>상태</th></tr></thead>
+    <tbody>
+      <tr><td>Kong이 Redis 비밀번호를 쓰지 않아(<code>red:auth</code> 없음) 실제로 403을 내는지 확인 안 됨</td><td>11/02</td><td>pc2 확인 필요</td></tr>
+      <tr><td>대시보드 견본 파일 <code>secrets.toml.example</code>에 실제 비밀번호</td><td>11/02</td><td>처리 방법 미정</td></tr>
+      <tr><td>Streamlit에서 영구 차단(confirmed) 표시: 수정안을 pc3에 전달 (차단 횟수 표시는 사용자가 반영함)</td><td>11/03, 11/04</td><td>반영 여부 확인 필요</td></tr>
+      <tr><td>Redis 스트림이 정리하기 전부터 비어 있던 원인</td><td>11/04</td><td>미조사</td></tr>
+      <tr><td>컨테이너 <code>Exited (137)</code>: <code>stop_signal: SIGINT</code> 미적용</td><td>10/30</td><td>미적용</td></tr>
+      <tr><td>매일 장부를 다시 학습하는 자동 실행이 없음 (학습 로그 출처와 주기 미정)</td><td>10/30</td><td>미정</td></tr>
+      <tr><td>시간별 요약 알림에는 피해자 수가 아직 남아 있음</td><td>11/04</td><td>요청 시 수정</td></tr>
+    </tbody>
+  </table></div>
+
+  <!-- ============================================================ 규칙 -->
+  <h2 id="rules">대화하며 정해진 규칙</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>분야</th><th>규칙</th><th>정한 날</th></tr></thead>
+    <tbody>
+      <tr><td>git</td><td>저장소 <code>ahm0613/BOLA-project</code>의 <code>python-engin</code> 브랜치. 작성자는 C0dEPirAtEgg noreply 주소. 커밋·PR에 Claude 관련 줄을 넣지 않음</td><td>10/29, 11/04</td></tr>
+      <tr><td>비밀 정보</td><td>비밀번호는 <code>.env</code>에만 둠. <code>.env</code>, <code>server.key</code>, <code>confirmed.json</code>, <code>output/</code>, <code>archive/</code>, <code>reset.sh</code>는 올리지 않음. 푸시 전에 비밀번호가 들어 있는지 검사</td><td>10/29~11/04</td></tr>
+      <tr><td>BOLA-APP</td><td>읽기 전용, 수정·커밋하지 않음. 테스트 앱(members/orders)은 일부러 취약하게 유지</td><td>10/29, 11/03</td></tr>
+      <tr><td>구조</td><td>탐지 서버와 판단 서버를 분리하고 Redis로만 연결. 100점 이상이면 확정하고 이후 점수 계산은 멈춤. 원본은 <code>confirmed.json</code>, Redis는 집행용 사본</td><td>10/30, 11/02</td></tr>
+      <tr><td>설치 순서</td><td><code>ledger_v2</code>(1차 장부) → <code>ledger_v3</code>(BOLA 사용자 → <code>confirmed.json</code>) → <code>ledger_v2</code>(재학습) → 판단 서버 기동. <code>confirmed.json</code> 쓰기와 해제는 판단 서버를 멈춘 상태에서만</td><td>11/03</td></tr>
+      <tr><td>"db,log 정리"</td><td>DB <code>bola_events</code>·<code>user_status</code>·<code>alerts</code>, 파일 <code>score_log.jsonl</code>·<code>confirmed_log.jsonl</code>·<code>breached_apis.json</code>·<code>confirmed.json</code>, Redis 차단 키와 스트림 <code>bola:events</code>. 백업 없음. judge 컨테이너는 새로 만듦. 11/05부터 <code>reset.sh</code> 사용</td><td>11/03~11/05</td></tr>
+      <tr><td>Docker</td><td>WSL Docker 사용. 멈출 때는 <code>docker compose stop</code>, <code>down -v</code> 금지. <code>config.json</code> 변경은 재시작, <code>.py</code> 변경은 <code>up -d --build</code></td><td>10/30, 11/03</td></tr>
+      <tr><td>DB 접근</td><td>pc3(192.168.0.26)만 허용. pc3에는 <code>bola_db.py</code>만 전달하고 대시보드는 다른 PC에서 직접 올림</td><td>10/30, 11/02</td></tr>
+      <tr><td>점수</td><td>운영 RATE는 10점, 테스트 기준값은 20점</td><td>11/04</td></tr>
+    </tbody>
+  </table></div>
+
+  <!-- ============================================================ 커밋 -->
+  <h2 id="commits">git 커밋 기록</h2>
+  <ul class="timeline">
+    <li><span class="when">2026-10-29 · 340fdb9, aca6972</span><b>폴더 구조 정리, 가짜 시험 데이터 삭제</b> — <code>bola-rule/</code>와 <code>judge-server/</code>를 나란히 두고, 가짜 로그·정답지 약 9MB 삭제</li>
+    <li><span class="when">2026-10-30 · 49d3a99</span><b>실시간 탐지 엔진(fluent-bit)과 판단 서버(judge) 추가</b></li>
+    <li><span class="when">2026-10-30 · edf6848</span><b>Docker 실행 구성과 DB 연동</b> — 예전 <code>bola-rule</code>·<code>judge-server</code> 삭제</li>
+    <li><span class="when">2026-10-30 · 618018a</span><b>로그온 시 자동 시작</b></li>
+    <li><span class="when">2026-11-02 · 2327336</span><b>영구 차단, 2단계 장부 학습, 관리 스크립트와 문서</b></li>
+    <li><span class="when">2026-11-04 · 543f6b0</span><b>판단 엔진 고도화</b> — 쓰기 채점, UNKNOWN 승격, <code>api_infer.py</code>, <code>notifier.py</code>, 시뮬레이터 확장, <code>import_confirmed.py</code> 제거</li>
+  </ul>
+
+  <h2>11/05 오후 (이 정리를 만든 대화)</h2>
+  <p>코드는 바꾸지 않았습니다. <code>ledger_v3.py</code>의 역할과 judge 폴더 설명 순서를 정리하고, 이 기록을 만들면서 위의 A·B 문제를 발견했습니다.</p>
+</main>
+</body>
+</html>

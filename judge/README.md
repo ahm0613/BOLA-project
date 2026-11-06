@@ -78,7 +78,7 @@ pc3  Streamlit ──────────── 몇 초마다 SELECT ──�
 | `detected_at` | 탐지 엔진이 Redis에 올린 시각 = 스트림 ID의 시각 | Redis |
 | `user_id`, `action_type`, `api_path` | 의심 사용자, `kind`(BOLA/ATTEMPT/UNKNOWN/RATE), `api` | Redis |
 | `detection_reasons` (JSON) | `detail`(장부 비교 결과) + 판단 서버 분류(BOLA_PATH 등)·점수·피해자 | Redis + 판단 서버 |
-| `risk_score`, `assessed_at` | 이 이벤트까지 반영한 24시간 점수, 계산 시각 | 판단 서버 |
+| `risk_score`, `assessed_at` | 이 이벤트까지 반영한 점수(`window_sec` 동안, 0이면 전체 누적), 계산 시각 | 판단 서버 |
 | `decision`, `decision_reason` | normal / watch(30) / warning(60) / attack(100) / ignored(본인 번호 오탐), 근거 | 판단 서버 |
 | `user_status`, `user_status_updated_at` | 그 시점 사용자 상태(normal/watch/warning/confirmed), 상태가 바뀐 시각 | 판단 서버 |
 | `action_id`, `action_reason`, `decided_at`, `enforcement_status`, `enforced_at`, `expires_at`, `released_at` | 조치가 있는 이벤트에만 (없으면 NULL) | 판단 서버 |
@@ -185,7 +185,11 @@ docker compose exec -T postgres psql -U postgres -d bola_judge -v judge_user=jud
 - 확정할 때마다 근거(점수 내역, 피해자, 자원 종류, 이벤트 수)가 `output/confirmed_log.jsonl`에 한 줄씩 남습니다.
 - 임시 파일에 쓴 뒤 바꿔치기하므로, 다른 프로그램이 쓰다 만 파일을 읽지 않습니다.
 
-## 점수 (최근 24시간, `config.json`에서 조정)
+## 점수 (`config.json`에서 조정)
+
+- `window_sec`: 점수를 합산하는 기간(초). **0이면 기간 제한 없이 영구 누적**합니다 (지금 설정). 86400이면 최근 24시간만 합산합니다.
+- 영구 누적에서는 점수가 줄지 않습니다. 정상 사용자의 `ATTEMPT`·`RATE`도 오래 쌓이면 기준에 닿을 수 있으니 점수 상위 사용자를 가끔 확인하세요.
+- 점수를 처음부터 다시 시작하려면 DB `bola_events`를 비웁니다 (재시작할 때 이 테이블로 점수를 복원하므로).
 
 | 항목 | 점수 | 조건 |
 |---|---|---|
@@ -236,15 +240,18 @@ pip install redis
 copy .env.example .env          # REDIS_PASSWORD 채우기 (Redis에 비밀번호가 걸려 있음)
 
 python judge.py                 # 계속 실행 (judges 그룹으로 새 이벤트를 받음, Ctrl+C 종료)
-python judge.py --once          # 최근 24시간 이벤트로 한 번 계산 후 종료 (그룹·ACK 안 건드림)
-python judge.py --once --all    # 스트림 전체로 한 번 계산
+python judge.py --once          # 점수 복원과 같은 범위로 한 번 계산 후 종료 (그룹·ACK 안 건드림)
+python judge.py --once --all    # window_sec과 상관없이 DB·스트림 전체로 한 번 계산
 python judge.py --once --all --dry-run   # 결과만 보고 파일은 쓰지 않음
 
 python -m unittest discover tests
 ```
 
-- 시작하면 최근 24시간 이벤트를 다시 읽어 점수를 복원하고, 그 다음 이벤트부터 그룹으로 받습니다. 복원에서 이미 본 이벤트가 그룹으로 다시 오면 점수에 두 번 넣지 않고 ACK만 합니다.
-- Redis가 꺼져 있으면 3초마다 다시 연결을 시도합니다. 비밀번호가 틀리면 바로 안내하고 종료합니다.
+- 시작하면 과거 이벤트를 다시 채점해 점수를 복원하고(범위는 `window_sec`, 0이면 전체), 그 다음 이벤트부터 그룹으로 받습니다.
+  - ① PostgreSQL `bola_events`에서 먼저 복원합니다 (`config.json` `db.restore`, 기본 켜짐). Redis 스트림은 최근 10만 건만 남지만 DB에는 전부 남아 있어서, 오래된 이벤트의 점수도 잃지 않습니다. DB에서 복원한 이벤트는 다시 기록하지 않습니다.
+  - ② Redis 스트림에서 ①의 마지막 이벤트 이후(DB에 아직 못 쓴 것)만 보충합니다. DB를 읽을 수 없으면 지금까지처럼 Redis만으로 복원합니다.
+  복원에서 이미 본 이벤트가 그룹으로 다시 오면 점수에 두 번 넣지 않고 ACK만 합니다.
+- Redis가 꺼져 있으면(연결 거부·시간 초과 모두) 3초마다 다시 연결을 시도합니다. 비밀번호가 틀리면 바로 안내하고 종료합니다.
 - 60초마다 `[상태] 이벤트 N … 확정 사용자 N … 점수 상위 …`를 출력합니다.
 
 ### 실시간 점수 로그
@@ -287,8 +294,8 @@ judge.py (총괄)  ── 이벤트를 받아 아래 담당들에게 넘기고 �
 
 | 파일 | 쉽게 말하면 | 하는 일 |
 |---|---|---|
-| **`judge.py`** | 총괄 지휘자 | Redis에서 이벤트를 꺼내 나머지 담당들에게 넘기고, 시작할 때 최근 24시간을 복원하며, 60초마다 상태를 출력합니다. 다른 파일들을 **불러 쓰는 중심**입니다. |
-| **`scoring.py`** | 점수 매기는 머리 | 이벤트 하나를 보고 "이건 BOLA_PATH 40점" 식으로 분류·채점하고, 24시간 합계가 100점을 넘으면 **확정**이라고 알려 줍니다. Redis·파일을 전혀 몰라서 **테스트하기 쉽습니다**. |
+| **`judge.py`** | 총괄 지휘자 | Redis에서 이벤트를 꺼내 나머지 담당들에게 넘기고, 시작할 때 DB·Redis로 점수를 복원하며, 60초마다 상태를 출력합니다. 다른 파일들을 **불러 쓰는 중심**입니다. |
+| **`scoring.py`** | 점수 매기는 머리 | 이벤트 하나를 보고 "이건 BOLA_PATH 40점" 식으로 분류·채점하고, `window_sec` 동안(0이면 전체) 합계가 100점을 넘으면 **확정**이라고 알려 줍니다. Redis·파일을 전혀 몰라서 **테스트하기 쉽습니다**. |
 | **`api_infer.py`** | 장부로 배우는 선생 | 학습 장부만 보고 "`/members/{id}`는 URL 번호 = 주인(1대1)"인 API를 **자동으로 찾아** `scoring.py`에 알려 줍니다. 앱 코드는 보지 않습니다. (`config.json`이 `"auto"`일 때) |
 | **`store.py`** | 확정 명단 담당 | 공격자로 확정된 사용자·요청을 `confirmed.json`에 쓰고 읽습니다. 관리자 해제(`released`)도 여기서 관리합니다. 이 파일 덕에 장부 학습이 공격 기록을 빼고 할 수 있습니다. |
 | **`blocker.py`** | 차단 집행관 | 확정된 공격자를 Redis `blocked:user:<id>`에 **만료 없이** 걸어 pc2 Kong이 403으로 막게 합니다. 명단과 Redis가 어긋나면 다시 맞춥니다(동기화). |

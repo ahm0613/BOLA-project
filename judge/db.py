@@ -7,15 +7,20 @@
   - DB가 꺼져 있으면 큐에 쌓아 두고 다시 연결되면 씀 (큐가 너무 커지면 오래된 것부터 버림)
   - sweep_sec마다 만료 시각이 지난 임시 차단(RATE)을 expired로 바꾸고 released_at을 채움
 이벤트는 stream_id가 같으면 한 번만 들어가므로, 판단 서버를 다시 시작해 과거 이벤트를 다시 읽어도 중복되지 않는다.
+
+점수 복원 (read_events): 판단 서버가 시작할 때 bola_events를 stream_id 순으로 읽어 Redis 이벤트 모양으로 되돌림.
+  Redis 스트림은 최근 10만 건만 남지만(realtime.py STREAM_MAXLEN) DB에는 전부 남으므로 누적 점수를 잃지 않는다.
 """
 import json
 import os
 import threading
 import time
 from collections import deque
+from datetime import datetime, timezone
 
 try:
     import psycopg
+    from psycopg.rows import dict_row
 except ImportError:                                     # 패키지가 없으면 DB 기록 없이 동작 (judge.py가 안내)
     psycopg = None
 
@@ -44,6 +49,48 @@ ON CONFLICT (user_id) DO UPDATE SET
 SQL_SWEEP = """
 UPDATE bola_events SET enforcement_status = 'expired', released_at = expires_at
 WHERE enforcement_status = 'applied' AND expires_at IS NOT NULL AND expires_at < now()"""
+
+
+# 점수 복원용: Redis에서 온 이벤트만 (SYNC-… 같은 명단 동기화 행 제외), 스트림 ID 순서 그대로
+# stream_id는 TEXT라 "…-10"이 "…-9"보다 앞에 오지 않게 숫자로 나눠 정렬
+SQL_REPLAY = """
+SELECT stream_id, action_type, user_id, api_path, event_id, event_at, detection_reasons,
+       user_status, user_status_updated_at
+FROM bola_events
+WHERE stream_id ~ '^[0-9]+-[0-9]+$' AND detected_at >= %(since)s
+ORDER BY split_part(stream_id, '-', 1)::bigint, split_part(stream_id, '-', 2)::bigint"""
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def row_to_event(row):
+    """bola_events 한 행(dict) → (stream_id, Redis 필드 dict, (사용자 상태, 상태 변경 시각))
+    Redis 필드는 realtime.py가 보내는 모양(모두 문자열)으로 되돌림. 주인 번호는 detail 문장("주인 N")에 들어 있음"""
+    dr = row.get("detection_reasons") or {}
+    if isinstance(dr, str):
+        dr = json.loads(dr)
+    at = row.get("event_at")
+    fields = {
+        "kind": row.get("action_type") or "",
+        "user_id": str(row.get("user_id")),
+        "api": row.get("api_path") or "",
+        "uri": dr.get("uri") or "",
+        "status": str(dr.get("status") or 0),
+        "request_id": row.get("event_id") or "",
+        "started_at": str(round(at.timestamp() * 1000)) if at else "0",
+        "detail": dr.get("detail") or "",
+    }
+    return row["stream_id"], fields, (row.get("user_status"), row.get("user_status_updated_at"))
+
+
+def read_events(dsn, since=None, batch=2000):
+    """bola_events를 stream_id 순으로 하나씩 돌려줌 (row_to_event 모양). since: 이 시각(탐지 시각) 이후만, None이면 전체
+    서버 쪽 커서로 batch건씩 받아서 행이 많아도 메모리를 한꺼번에 쓰지 않음"""
+    with psycopg.connect(dsn, connect_timeout=5, row_factory=dict_row) as conn:
+        with conn.cursor(name="judge_replay") as cur:
+            cur.itersize = batch
+            cur.execute(SQL_REPLAY, {"since": since or EPOCH})
+            for row in cur:
+                yield row_to_event(row)
 
 
 def dsn_from_env():

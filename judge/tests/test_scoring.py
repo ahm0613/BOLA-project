@@ -111,10 +111,22 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(score, 85)
 
     def test_window(self):
-        """24시간 밖 이벤트는 점수에서 빠짐"""
-        self.j.process(ev("2", "BOLA", "/orders/5", owner="9", sec=0))
-        self.j.process(ev("2", "BOLA", "/orders/6", owner="9", sec=90000))
-        self.assertEqual(self.j.top()[0][0], 25)
+        """window_sec=86400이면 24시간 밖 이벤트는 점수에서 빠짐"""
+        j = Judge({**CFG, "window_sec": 86400})
+        j.process(ev("2", "BOLA", "/orders/5", owner="9", sec=0))
+        j.process(ev("2", "BOLA", "/orders/6", owner="9", sec=90000))
+        self.assertEqual(j.top()[0][0], 25)
+
+    def test_permanent(self):
+        """window_sec=0이면 기간 제한 없이 누적, 판단 사유는 '누적 점수'"""
+        j = Judge({**CFG, "window_sec": 0})
+        j.process(ev("2", "BOLA", "/members/3", owner="3", sec=0))
+        j.process(ev("2", "BOLA", "/members/4", owner="4", sec=86400 * 30))        # 30일 뒤
+        self.assertEqual(j.top()[0][0], 80)
+        self.assertEqual(j.last["level_up"]["reason"], "누적 점수 80점 ≥ warning 기준 60점")
+        out = j.process(ev("2", "ATTEMPT", "/members/5", status=403, sec=86400 * 365))   # 1년 뒤에도 그대로 +5
+        self.assertEqual(j.last["total"], 85)
+        self.assertEqual(out, [])
 
     def test_last_trace(self):
         """이벤트마다 채점 결과(last)가 남음: 무시 / 점수 누적 / 확정"""

@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BOLA 동작 시나리오</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e2e2e0;
+    --accent: #2f6fdb; --warn: #c77700; --bad: #c62f2f; --ok: #1f8a4c; --code: #f0f0ee;
+    --tag-fb: #e7efff; --tag-jd: #fff1e0; --tag-tool: #eaf6ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161618; --card: #1f1f22; --text: #ececee; --muted: #9a9aa2; --line: #303035;
+      --accent: #6c9cff; --warn: #f0a63a; --bad: #ff6b6b; --ok: #4cc47f; --code: #2a2a2e;
+      --tag-fb: #22304d; --tag-jd: #3d2e1a; --tag-tool: #1d3526;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161618; --card: #1f1f22; --text: #ececee; --muted: #9a9aa2; --line: #303035;
+    --accent: #6c9cff; --warn: #f0a63a; --bad: #ff6b6b; --ok: #4cc47f; --code: #2a2a2e;
+    --tag-fb: #22304d; --tag-jd: #3d2e1a; --tag-tool: #1d3526;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.65 "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 44px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 0; }
+  h4 { font-size: 14px; margin: 14px 0 6px; color: var(--muted); }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px;
+         font-family: "D2Coding", Consolas, monospace; }
+  pre { background: var(--code); padding: 12px 14px; border-radius: 8px; overflow-x: auto; font-size: 12.5px;
+        line-height: 1.5; font-family: "D2Coding", Consolas, monospace; margin: 8px 0; }
+  p { margin: 6px 0; }
+  ul, ol { margin: 6px 0; padding-left: 20px; }
+  li { margin: 2px 0; }
+
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; font-size: 14px; }
+  nav.toc a { color: var(--accent); text-decoration: none; }
+  nav.toc ol { columns: 2; column-gap: 24px; }
+  @media (max-width: 600px) { nav.toc ol { columns: 1; } }
+
+  .arch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .pc { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; font-size: 14px; }
+  .pc .ip { color: var(--muted); font-size: 12px; font-weight: normal; }
+  @media (max-width: 720px) { .arch { grid-template-columns: 1fr; } }
+
+  /* 파일 카드 */
+  .file { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 14px 0; }
+  .file header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 6px; }
+  .file header .path { font-family: "D2Coding", Consolas, monospace; font-size: 16px; font-weight: 700; }
+  .tag { font-size: 12px; padding: 1px 8px; border-radius: 10px; }
+  .t-fb { background: var(--tag-fb); } .t-jd { background: var(--tag-jd); } .t-tool { background: var(--tag-tool); }
+  .file .role { color: var(--muted); font-size: 14px; }
+  .io { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+  .io > div { background: var(--code); border-radius: 8px; padding: 8px 12px; font-size: 13.5px; }
+  .io b { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  @media (max-width: 640px) { .io { grid-template-columns: 1fr; } }
+
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--code); font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .tablewrap { overflow-x: auto; margin: 8px 0; border-radius: 8px; }
+
+  .steps { list-style: none; margin: 0; padding: 0; position: relative; }
+  .steps::before { content: ""; position: absolute; left: 15px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+  .steps > li { position: relative; padding: 0 0 18px 46px; }
+  .steps .n { position: absolute; left: 0; top: 0; width: 32px; height: 32px; border-radius: 50%;
+              background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 14px; }
+  .steps .where { font-size: 12px; color: var(--muted); }
+  .steps .what { font-weight: 600; }
+
+  .score { display: grid; gap: 8px; margin: 10px 0; }
+  .row { display: grid; grid-template-columns: 110px 1fr 80px; gap: 10px; align-items: center; font-size: 14px; }
+  .bar { height: 14px; background: var(--code); border-radius: 7px; position: relative; overflow: hidden; }
+  .bar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 7px; }
+  .lv { font-weight: 600; text-align: right; }
+  .scale { display: grid; grid-template-columns: 110px 1fr 80px; gap: 10px; font-size: 12px; color: var(--muted); }
+  .scale div:nth-child(2) { position: relative; height: 16px; }
+  .scale i { position: absolute; font-style: normal; transform: translateX(-50%); white-space: nowrap; }
+  @media (max-width: 520px) { .row, .scale { grid-template-columns: 76px 1fr 64px; } }
+
+  .note { background: var(--card); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 6px; font-size: 14px; margin: 10px 0; }
+  .warnnote { border-left-color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <h1>BOLA 탐지·판단 시스템 동작 시나리오</h1>
+  <p class="sub">Python 파일별 동작 위주 정리 · 2026-11-06 기준 (점수 영구 누적, DB 복원 반영)</p>
+
+  <nav class="toc">
+    <ol>
+      <li><a href="#arch">전체 구성과 파일 지도</a></li>
+      <li><a href="#learn">준비 단계: 장부 학습 (ledger_v2, ledger_v3)</a></li>
+      <li><a href="#detect">탐지: realtime.py</a></li>
+      <li><a href="#judge">판단: judge.py와 보조 모듈</a></li>
+      <li><a href="#scenario">시나리오: 요청 하나가 차단되기까지</a></li>
+      <li><a href="#ops">운영 도구: unblock, notifier, simulate</a></li>
+      <li><a href="#cases">상황별 동작</a></li>
+      <li><a href="#where">어디서 확인하나</a></li>
+    </ol>
+  </nav>
+
+  <!-- ===================================================== 1 -->
+  <h2 id="arch">1. 전체 구성과 파일 지도</h2>
+  <div class="arch">
+    <div class="pc">
+      <h3>pc2 게이트웨이 <span class="ip">192.168.0.39</span></h3>
+      <ul>
+        <li>Kong: API 처리. 요청마다 Redis <code>blocked:user:N</code>를 확인하고, 키가 있으면 403</li>
+        <li>Fluent Bit: Kong 접근 로그를 pc1:5170으로 전송 (mTLS)</li>
+        <li>Redis: <code>bola:events</code> 스트림과 차단 키</li>
+      </ul>
+    </div>
+    <div class="pc">
+      <h3>pc1 탐지·판단 <span class="ip">192.168.0.40 · WSL Docker</span></h3>
+      <ul>
+        <li><code>bola-realtime</code> → <code>fluent-bit/realtime.py</code></li>
+        <li><code>bola-judge</code> → <code>judge/judge.py</code> 외 7개 모듈</li>
+        <li><code>judge-postgres</code> → PostgreSQL 17</li>
+        <li>수동 실행: <code>ledger_v2.py</code>, <code>ledger_v3.py</code>, <code>unblock.py</code></li>
+      </ul>
+    </div>
+    <div class="pc">
+      <h3>pc3 대시보드 <span class="ip">192.168.0.26</span></h3>
+      <ul>
+        <li>Streamlit이 <code>dashboard</code> 계정(읽기 전용)으로 DB를 조회</li>
+        <li>방화벽은 pc3에서 오는 5432 접속만 허용</li>
+      </ul>
+    </div>
+  </div>
+
+<pre>[준비, 수동]  access_fake.json ─ledger_v2.py─▶ ledger_days/ + ledger.json ─ledger_v3.py─▶ confirmed.json
+
+[실시간]
+ Kong ─▶ Fluent Bit ══mTLS:5170══▶ <b>realtime.py</b> ──XADD──▶ Redis bola:events
+   ▲                                   │ 10초 10회 초과                       │ XREADGROUP
+   │                                   └─▶ SET blocked:user:N EX 600         ▼
+   │                                                                  <b>judge.py</b>
+   │                                         ┌──────────────┬──────────────┼──────────────┬───────────────┐
+   │                                    scoring.py      api_infer.py     store.py       db.py         notifier.py
+   │                                    (점수·확정)     (1대1 API 추론)  (confirmed.json) (PostgreSQL)  (Slack)
+   └──────── blocked:user:N (영구) ◀── blocker.py                                         │
+                                                                                         ▼
+                                                                                  pc3 Streamlit</pre>
+
+  <div class="tablewrap">
+  <table>
+    <tr><th>파일</th><th>실행 방식</th><th>한 줄 역할</th></tr>
+    <tr><td><code>fluent-bit/common.py</code></td><td>모듈</td><td>로그 한 줄 파싱, <code>GET /orders/7 → GET /orders/{id}</code> 변환</td></tr>
+    <tr><td><code>fluent-bit/ledger_v2.py</code></td><td>수동</td><td>과거 30일 로그로 "객체 → 주인" 장부 학습</td></tr>
+    <tr><td><code>fluent-bit/ledger_v3.py</code></td><td>수동 (설치할 때 한 번)</td><td>설치 전 로그에서 BOLA 사용자를 찾아 <code>confirmed.json</code>에 넣음</td></tr>
+    <tr><td><code>fluent-bit/realtime.py</code></td><td>Docker <code>bola-realtime</code></td><td>실시간 판정(BOLA/ATTEMPT/UNKNOWN), 10분 임시 차단</td></tr>
+    <tr><td><code>judge/judge.py</code></td><td>Docker <code>bola-judge</code></td><td>총괄: 이벤트 수신, 점수 복원, 각 모듈 호출</td></tr>
+    <tr><td><code>judge/scoring.py</code></td><td>모듈</td><td>분류·채점·확정 (Redis·파일을 모르는 순수 로직)</td></tr>
+    <tr><td><code>judge/api_infer.py</code></td><td>모듈</td><td>장부로 "URL 번호 = 사용자 번호" API 자동 추론 (<code>judge.py</code>와 <code>ledger_v3.py</code>가 같이 사용)</td></tr>
+    <tr><td><code>judge/store.py</code></td><td>모듈</td><td><code>confirmed.json</code> 읽기·쓰기, 확정 근거 기록</td></tr>
+    <tr><td><code>judge/blocker.py</code></td><td>모듈</td><td>Redis 영구 차단 키 걸기·풀기·맞추기</td></tr>
+    <tr><td><code>judge/db.py</code></td><td>모듈</td><td>PostgreSQL 기록(백그라운드 스레드), 재시작할 때 점수 복원용 조회</td></tr>
+    <tr><td><code>judge/notifier.py</code></td><td>모듈 / 수동 <code>--test</code></td><td>Slack 알림 (관리자, 개발자), 매시 요약</td></tr>
+    <tr><td><code>judge/unblock.py</code></td><td>수동 (관리자)</td><td>오탐일 때 영구 차단 해제</td></tr>
+    <tr><td><code>attack/simulate.py</code></td><td>수동 (검증용)</td><td>본인 테스트 앱에 BOLA 공격을 보내 탐지·차단 검증</td></tr>
+  </table>
+  </div>
+
+  <!-- ===================================================== 2 -->
+  <h2 id="learn">2. 준비 단계: 장부 학습</h2>
+  <p>탐지는 "이 객체의 주인이 누구인가"를 알아야 할 수 있습니다. 그래서 설치 전에 과거 로그로 <b>장부(ledger)</b>를 만듭니다.</p>
+
+  <div class="file">
+    <header><span class="path">fluent-bit/ledger_v2.py</span><span class="tag t-tool">수동</span>
+      <span class="role">과거 로그 → 객체별 주인 장부</span></header>
+    <div class="io">
+      <div><b>입력</b><code>data/access_fake.json</code> (Kong 형식 로그), <code>confirmed.json</code>(제외할 요청·사용자)</div>
+      <div><b>출력</b><code>ledger_days/날짜.json</code>(날짜별 집계), <code>ledger.json</code> = <code>{API: {객체ID: 주인 또는 null}}</code></div>
+    </div>
+    <h4>동작 순서</h4>
+    <ol>
+      <li><b>학습 대상 고르기</b> (<code>is_learnable</code>): 상태 200, <code>role=user</code>, 로그인 사용자, Kong이 막지 않은 요청만 씁니다.</li>
+      <li><b>제외</b> (<code>is_excluded</code>): <code>confirmed.json</code>의 확정 요청, 그리고 확정 사용자의 확정 시각 이후 요청을 뺍니다. 공격 흔적으로 장부가 오염되지 않게 하려는 것입니다.</li>
+      <li><b>날짜별 집계</b> (<code>build_days</code>): 어제부터 30일치(<code>WINDOW_DAYS</code>)를 한 줄씩 읽어 "그날 누가 어떤 객체를 몇 번 봤나"를 셉니다. 목록 응답의 <code>resp_ids</code>에 나온 객체도 그 사용자가 본 것으로 칩니다. 이미 만든 날짜는 재사용하고, <code>confirmed.json</code>이 바뀌면 다시 만듭니다.</li>
+      <li><b>상한(cap)</b> (<code>compute_cap</code>): 한 사람이 하루에 같은 객체를 수십 번 새로고침해도 표가 몰리지 않게, 하루 몇 번까지만 셀지 정합니다. 사용자별 99퍼센타일의 중앙값을 쓰고 2~10 범위로 제한하며, 한 번에 1씩만 바뀝니다.</li>
+      <li><b>주인 결정</b> (<code>merge</code> → <code>decide_owner</code>): 30일 합산에서 한 사용자의 몫이 <b>70% 이상</b>(<code>MIN_SHARE</code>)이면 그 사용자가 주인이고, 아니면 <code>null</code>(공유 객체, 판정하지 않음)입니다.</li>
+    </ol>
+  </div>
+
+  <div class="file">
+    <header><span class="path">fluent-bit/ledger_v3.py</span><span class="tag t-tool">수동 · 설치할 때 한 번</span>
+      <span class="role">설치 전 로그의 BOLA 사용자 → confirmed.json</span></header>
+    <div class="io">
+      <div><b>입력</b><code>ledger_days/</code>, <code>ledger.json</code>(1차 장부), 원본 로그, <code>judge/config.json</code>(path_owners, path_infer), <code>judge/api_infer.py</code></div>
+      <div><b>출력</b><code>confirmed.json</code>의 <code>users</code>(사용자 → 처음 공격한 날 00:00)와 <code>requests</code>(공격 요청 ID). 1대1 API 목록은 화면에만 출력하고 저장하지 않음</div>
+    </div>
+    <h4>동작 순서</h4>
+    <ol start="0">
+      <li><b>1대1 API 정하기</b> (<code>resolve_path_owners</code>): judge와 같은 규칙으로 "URL 번호 = 사용자 번호"인 API를 정합니다. judge가 켜져 있지 않아도 됩니다. ①단계(<code>ledger_v2.py</code>)에서 이미 만든 <code>ledger.json</code>만 있으면 추론할 수 있습니다.
+        <div class="tablewrap">
+        <table>
+          <tr><th><code>config.json</code>의 <code>path_owners</code></th><th>사용하는 목록</th></tr>
+          <tr><td><code>"auto"</code> (지금 설정)</td><td><code>judge/api_infer.py</code>의 <code>infer(ledger)</code> 결과. judge와 같은 함수, 같은 <code>path_infer</code> 기준(표본 30↑, 일치율 95%↑)</td></tr>
+          <tr><td>목록 (예: <code>["/members/{id}"]</code>)</td><td>그 목록 그대로. <code>[]</code>이면 URL 판단을 끔</td></tr>
+          <tr><td>설정 없음</td><td>코드의 기본값 <code>DEFAULT_PATH_OWNERS</code> (<code>/members/{id}</code>, <code>/profiles/{id}</code>)</td></tr>
+        </table>
+        </div>
+<pre>[1대1 추론] /members/{id}   표본 2055건, 일치 2055건 (100.0%) → 1대1
+[1대1 추론] /profiles/{id}  표본 1978건, 일치 1978건 (100.0%) → 1대1
+[1대1 추론] /orders/{id}    표본 2977건, 일치    2건 (  0.1%) → 장부 사용
+[1대1 추론] path_owners = ['/members/{id}', '/profiles/{id}']</pre>
+        <p>2026-11-06 수정 전에는 <code>"auto"</code> 문자열을 경로 목록으로 잘못 읽어서(<code>[['a'],['u'],['t'],['o']]</code>) URL 판단이 꺼져 있었습니다. 그래서 장부에서 빠진 회원·프로필 객체를 피해자로 세지 못했습니다.</p></li>
+      <li><b>의심 사용자 찾기</b> (<code>find_suspects</code>): 사용자별 30일치 기록에서 "남의 것"을 셉니다.
+        <ul><li>⓪에서 정한 1대1 API는 장부를 보지 않고 URL 번호로 주인을 판단합니다 (<code>path_foreign</code>). 장부에 빠진 객체도 셀 수 있습니다.</li>
+            <li>그 밖의 API는 <code>ledger.json</code>의 주인이 요청자가 아니면 남의 것입니다 (<code>foreign</code>). 주인이 <code>null</code>인 객체는 셀 수 없습니다.</li>
+            <li>서로 다른 피해자가 <b>3명 이상</b>(<code>--min-victims</code>)이면 의심 사용자로 봅니다.</li></ul></li>
+      <li><b>공격 요청 모으기</b> (<code>collect_requests</code>): 원본 로그에서 그 사용자의 BOLA(200, 남의 것)와 ATTEMPT(403/404) 요청 ID를 모읍니다. 주인 판단에는 ⓪의 1대1 목록을 똑같이 씁니다.</li>
+      <li><b>합치기</b> (<code>merge_confirmed</code>): 기존 명단은 지우지 않고 추가만 합니다. 관리자가 해제한(<code>released</code>) 사용자는 다시 넣지 않습니다.</li>
+      <li><b>안전장치</b> (<code>judge_status</code>): judge 소비자가 최근 15초 안에 Redis를 읽었으면 실행을 거부합니다. 켜진 judge가 파일을 덮어쓰기 때문입니다.</li>
+    </ol>
+  </div>
+
+<pre>설치 순서
+  ① python ledger_v2.py            1차 장부
+  ② python ledger_v3.py --dry-run  미리 보기 → python ledger_v3.py   confirmed.json에 합침
+  ③ python ledger_v2.py            confirmed.json의 사용자·요청을 빼고 다시 학습 → 깨끗한 ledger.json
+  ④ docker compose up -d           judge가 켜지면서 confirmed.json 명단을 영구 차단</pre>
+
+  <!-- ===================================================== 3 -->
+  <h2 id="detect">3. 탐지: realtime.py</h2>
+  <div class="file">
+    <header><span class="path">fluent-bit/realtime.py</span><span class="tag t-fb">Docker bola-realtime · 포트 5170</span>
+      <span class="role">로그 한 줄마다 즉시 판정</span></header>
+    <div class="io">
+      <div><b>입력</b>pc2 Fluent Bit이 TCP(mTLS)로 보내는 Kong 로그 한 줄 = 요청 하나. <code>ledger.json</code></div>
+      <div><b>출력</b>Redis <code>bola:events</code>에 이벤트(<code>XADD</code>, 최대 10만 건 유지), 임시 차단 키 <code>blocked:user:N</code></div>
+    </div>
+
+    <h4>연결</h4>
+    <p><code>TLSServer</code>가 <code>certs/server.crt</code>로 TLS를 열고, <b>CA가 서명한 클라이언트 인증서가 없으면 연결을 거부</b>합니다(<code>CERT_REQUIRED</code>). 연결마다 <code>Handler</code> 스레드가 한 줄씩 읽어 <code>process()</code>를 호출합니다.</p>
+
+    <h4>process(e): 요청 하나 처리</h4>
+    <ol>
+      <li><code>is_user_request</code>: <code>role=user</code>이고 로그인했으며 Kong이 막지 않은 요청만 처리합니다. 관리자, 비로그인, 이미 차단된 요청은 무시합니다.</li>
+      <li><code>reload_ledger</code>: 60초마다 <code>ledger.json</code>이 바뀌었는지 확인하고, 바뀌었으면 다시 읽습니다. 실시간으로 추가한 객체는 유지합니다.</li>
+      <li><code>add_from_list</code> / <code>add_from_created</code>: 개인 목록(<code>GET /orders</code>)에 나온 객체와 방금 만든 객체(POST 201)를 요청자 것으로 장부에 추가합니다. 그래서 막 주문한 사람의 주문 상세 조회가 UNKNOWN으로 잡히지 않습니다.</li>
+      <li><code>judge(e, ledger)</code>: 판정합니다 (아래 표).</li>
+      <li>의심 요청이면 <code>report</code>로 Redis에 보내고, <code>count_suspicious</code>로 최근 10초 안의 의심 요청 수를 셉니다. <b>10번을 넘으면</b> <code>temp_block</code>을 실행합니다.</li>
+    </ol>
+
+    <h4>judge(): 판정 규칙 (위에서부터, 처음 맞는 것)</h4>
+    <div class="tablewrap">
+    <table>
+      <tr><th>#</th><th>조건</th><th>결과</th></tr>
+      <tr><td>1</td><td>URL에 숫자 ID가 없음, 또는 장부에 그 API가 없음</td><td>판정 안 함</td></tr>
+      <tr><td>2</td><td>상태 403 / 404</td><td><code>ATTEMPT</code></td></tr>
+      <tr><td>3</td><td>장부에 그 객체 ID가 없음</td><td><code>UNKNOWN</code></td></tr>
+      <tr><td>4</td><td>장부의 주인이 <code>null</code> (공유 객체)</td><td>판정 안 함</td></tr>
+      <tr><td>5</td><td>상태 200/204이고 요청자 ≠ 주인</td><td><code>BOLA</code> <code>"요청자 7 -> 3 (주인 3)"</code></td></tr>
+      <tr><td>6</td><td>그 밖 (본인 객체)</td><td>정상, 출력 안 함</td></tr>
+    </table>
+    </div>
+    <p><code>same_object_apis</code>: <code>PATCH /members/{id}</code>로 학습된 기록이 없으면 <code>GET /members/{id}</code>의 장부를 씁니다. 같은 객체는 메서드가 달라도 주인이 같기 때문입니다.</p>
+
+    <h4>임시 차단 temp_block()</h4>
+    <p><code>SET blocked:user:N "rate" EX 600 NX</code>를 실행합니다. <code>NX</code> 옵션이라서 <b>이미 키가 있으면(영구 차단 포함) 덮어쓰지 않습니다.</b> 새로 걸었을 때만 <code>RATE</code> 이벤트를 보고합니다.</p>
+
+    <h4>Redis 이벤트 모양</h4>
+<pre>XADD bola:events MAXLEN ~100000 *
+  kind=BOLA  user_id=7  api="GET /members/{id}"  uri=/members/3  status=200
+  request_id=a1…  started_at=1793…  detail="요청자 7 -> 3 (주인 3)"</pre>
+  </div>
+
+  <!-- ===================================================== 4 -->
+  <h2 id="judge">4. 판단: judge.py와 보조 모듈</h2>
+
+  <div class="file">
+    <header><span class="path">judge/judge.py</span><span class="tag t-jd">Docker bola-judge</span>
+      <span class="role">총괄: 받고, 채점을 맡기고, 결과를 내보냄</span></header>
+    <div class="io">
+      <div><b>입력</b>Redis <code>bola:events</code> (소비자 그룹 <code>judges</code>), <code>config.json</code>, <code>.env</code></div>
+      <div><b>출력</b><code>confirmed.json</code>, Redis 영구 차단 키, PostgreSQL, Slack, <code>output/*.jsonl</code></div>
+    </div>
+
+    <h4>시작 순서 main()</h4>
+    <ol>
+      <li><code>load_env</code>, <code>load_config</code>: <code>.env</code>와 <code>config.json</code>을 읽습니다.</li>
+      <li><code>Server.__init__</code>: Redis 클라이언트(연결 대기 5초), <code>ConfirmedStore</code>, <code>Judge</code>, <code>DbWriter</code>, <code>Blocker</code>, <code>Notifier</code>를 만듭니다. <code>path_owners: "auto"</code>이면 <code>api_infer</code>로 1대1 API를 먼저 추론합니다.</li>
+      <li><b>점수 복원 ①</b> <code>rebuild_db()</code>: PostgreSQL <code>bola_events</code>를 스트림 ID 순서로 읽어 다시 채점합니다. 이미 DB에 있는 행이므로 <b>다시 쓰지 않고</b>(<code>replaying=True</code>), 사용자 상태가 바뀐 시각도 이어받습니다.</li>
+      <li><b>점수 복원 ②</b> <code>rebuild()</code>: Redis에서 ①의 마지막 ID 이후, 즉 DB에 아직 못 쓴 이벤트만 보충합니다. Redis가 꺼져 있으면 3초마다 다시 시도합니다. DB를 못 읽었다면 Redis만으로 복원합니다.</li>
+      <li><code>sync_blocks(force=True)</code>: <code>confirmed.json</code>에 있는데 Redis 영구 키가 없는 사용자를 다시 차단합니다.</li>
+      <li><code>notifier.start()</code>: 복원이 끝난 뒤부터 알림을 보냅니다. 과거 이벤트로는 알림을 보내지 않습니다.</li>
+      <li><code>consume()</code>: <code>XREADGROUP</code>으로 ① 받았지만 ACK 못 한 이벤트, ② 새 이벤트(5초 대기) 순서로 처리하고 ACK합니다. 그 사이 60초마다 상태 출력, 차단 키 동기화, 장부 변경 확인을 합니다.</li>
+    </ol>
+
+    <h4>이벤트 하나 handle(stream_id, fields)</h4>
+<pre>이미 본 ID?  ──yes──▶ 건너뜀 (복원과 그룹 수신이 겹쳐도 두 번 세지 않음)
+   │no
+   ▼
+parse_event → Judge.process   (scoring.py)
+   ├─ 새로 털린 (API, 객체)?          ─▶ output/breached_apis.json 갱신
+   ├─ 확정 결정이 있음?                ─▶ store.apply + save   (confirmed.json, confirmed_log.jsonl)
+   │     └─ type=user (사용자 확정)     ─▶ blocker.block_forever   (Redis 영구 차단)
+   ├─ notifier.on_scored               ─▶ Slack 큐 (보내기는 알림 스레드)
+   └─ record_db (복원 중이 아니면)      ─▶ DbWriter 큐 (쓰기는 저장 스레드)</pre>
+  </div>
+
+  <div class="file">
+    <header><span class="path">judge/scoring.py</span><span class="tag t-jd">모듈</span>
+      <span class="role">분류 → 채점 → 단계 → 확정 (Redis·파일을 모르는 순수 로직)</span></header>
+    <h4>classify(e): 이벤트 → 점수 항목</h4>
+    <div class="tablewrap">
+    <table>
+      <tr><th>조건</th><th>항목</th><th>점수</th></tr>
+      <tr><td>URL 번호가 요청자 본인 (BOLA·ATTEMPT·UNKNOWN)</td><td>없음 (장부 오탐으로 봄)</td><td>0</td></tr>
+      <tr><td>path_owners API에서 BOLA, 또는 UNKNOWN인데 200/204 성공</td><td><code>BOLA_PATH</code> / <code>BOLA_PATH_WRITE</code></td><td>40 / 60</td></tr>
+      <tr><td>그 밖의 BOLA (장부 근거)</td><td><code>BOLA_LEDGER</code> / <code>BOLA_LEDGER_WRITE</code></td><td>30 / 50</td></tr>
+      <tr><td>장부에 없는 객체</td><td><code>UNKNOWN</code></td><td>20</td></tr>
+      <tr><td>임시 차단 발생</td><td><code>RATE</code></td><td>10</td></tr>
+      <tr><td>403 / 404</td><td><code>ATTEMPT</code></td><td>5</td></tr>
+    </table>
+    </div>
+    <p><code>_WRITE</code>는 메서드가 PUT/PATCH/DELETE일 때입니다. 남의 객체를 수정하거나 삭제하는 것이라 조회보다 점수가 높습니다.</p>
+    <h4>score(): 합계와 보너스</h4>
+    <ul>
+      <li><code>+victims</code> 30: 서로 다른 피해자 3명 이상</li>
+      <li><code>+attempt_then_bola</code> 20: ATTEMPT 뒤에 BOLA 성공 (우회 경로를 찾았다는 뜻)</li>
+      <li><code>+multi_api</code> 10: 자원 종류(members, orders 등) 2개 이상에서 BOLA</li>
+    </ul>
+    <h4>process(): 단계와 확정</h4>
+    <ul>
+      <li>사용자별 이벤트 큐(<code>recent</code>)에 넣고 합계를 냅니다. <b><code>window_sec: 0</code>이면 오래된 이벤트를 빼지 않고 영구 누적</b>합니다.</li>
+      <li>단계: <code>normal</code> → <code>watch</code>(30) → <code>warning</code>(60) → <code>attack</code>(100, 확정). 단계는 올라가기만 합니다.</li>
+      <li>URL로 확인된 BOLA(<code>BOLA_PATH</code>)는 사용자 확정과 상관없이 그 <b>요청</b>을 바로 확정합니다.</li>
+      <li>100점 이상이면 <b>사용자</b>를 확정합니다. 확정된 뒤의 이벤트는 점수를 계산하지 않고 요청 ID만 추가합니다.</li>
+      <li>관리자가 해제한 시각(<code>released</code>) 이전의 이벤트는 채점하지 않습니다.</li>
+    </ul>
+  </div>
+
+  <div class="file">
+    <header><span class="path">judge/api_infer.py</span><span class="tag t-jd">모듈</span>
+      <span class="role">"URL 번호 = 사용자 번호"인 API를 장부로 추론</span></header>
+    <p>정상 사용자는 자기 것만 봅니다. 그래서 <code>/members/{id}</code>는 학습된 주인이 URL 번호와 항상 같고(225 = 225), <code>/orders/{id}</code>는 거의 다릅니다(1203 ≠ 400).</p>
+    <div class="tablewrap">
+    <table>
+      <tr><th>표본 30개 이상이고</th><th>판정</th><th>쓰임</th></tr>
+      <tr><td>일치율 95% 이상</td><td>1대1</td><td><code>path_owners</code>에 넣음 → <code>BOLA_PATH</code>로 채점</td></tr>
+      <tr><td>일치율 5% 이하</td><td>장부 사용</td><td><code>BOLA_LEDGER</code>로 채점</td></tr>
+      <tr><td>그 사이 / 표본 부족</td><td>판단 보류</td><td>쓰지 않음</td></tr>
+    </table>
+    </div>
+    <p>Redis, DB, judge 상태를 모르고 장부 dict만 받는 함수(<code>infer(ledger) → (path_owners, 통계)</code>)라서 두 곳에서 같이 씁니다.</p>
+    <ul>
+      <li><code>judge.py</code>: 시작할 때 추론하고, 60초마다 <code>ledger.json</code>의 수정 시각을 확인해서 바뀌었으면 다시 추론합니다.</li>
+      <li><code>ledger_v3.py</code>: 설치할 때 1차 장부로 추론합니다 (judge가 꺼져 있어도 됨). 그래서 설치 전 판정과 실시간 판정이 같은 1대1 기준을 씁니다.</li>
+    </ul>
+    <p>결과는 파일로 저장하지 않고 각 프로세스의 메모리에서만 씁니다. 단독 확인: <code>cd judge</code> → <code>python api_infer.py ..\fluent-bit\ledger.json</code></p>
+  </div>
+
+  <div class="file">
+    <header><span class="path">judge/store.py</span><span class="tag t-jd">모듈</span>
+      <span class="role">confirmed.json = 영구 차단 명단 + 학습 제외 목록</span></header>
+<pre>{"requests": ["979917aa-…", …],        확정된 공격 요청 → ledger_v2.py 학습에서 제외
+ "users":    {"7": 1793…},             확정 사용자 → 확정 시각(ms). 영구 차단 명단
+ "released": {"9": 1793…}}             관리자가 해제 → 이 시각 이전 이벤트로는 다시 확정 안 함</pre>
+    <p><code>apply()</code>는 확정을 반영하고 근거(점수 내역, 피해자, 요청 수)를 <code>output/confirmed_log.jsonl</code>에 한 줄씩 남깁니다. <code>save()</code>는 임시 파일에 쓴 뒤 바꿔치기해서 쓰다 만 파일이 읽히지 않게 합니다. 한 번 들어간 사용자는 judge가 지우지 않습니다(해제는 <code>unblock.py</code>로만).</p>
+  </div>
+
+  <div class="file">
+    <header><span class="path">judge/blocker.py</span><span class="tag t-jd">모듈</span>
+      <span class="role">Redis 영구 차단 키</span></header>
+<pre>blocked:user:7   "confirmed"   TTL 없음 (영구)     ← pc2 Kong이 요청마다 확인, 있으면 403
+block:info:7     {reason, blocked_at, by}           ← 사람이 확인하는 용도</pre>
+    <ul>
+      <li><code>block_forever</code>: 확정되는 순간 차단합니다. Redis 오류가 나도 예외를 던지지 않고 <code>False</code>를 돌려줘서 판단이 멈추지 않습니다.</li>
+      <li><code>not_blocked</code> / <code>sync</code>: 60초마다 <code>confirmed.json</code> 명단과 비교합니다. 키가 없거나(TTL -2), RATE 10분 키로 덮여 만료가 붙은 사용자는 다시 영구로 겁니다.</li>
+    </ul>
+  </div>
+
+  <div class="file">
+    <header><span class="path">judge/db.py</span><span class="tag t-jd">모듈</span>
+      <span class="role">PostgreSQL 기록과 점수 복원 조회</span></header>
+    <h4>쓰기: DbWriter</h4>
+    <ul>
+      <li>판정 루프는 <code>put_event</code>와 <code>put_user</code>로 메모리 큐에 넣고 바로 돌아갑니다. DB가 느려도 판단이 느려지지 않습니다.</li>
+      <li>저장 스레드가 1초(<code>flush_sec</code>)마다 큐를 비워 한 트랜잭션으로 씁니다. <code>bola_events</code>는 <code>ON CONFLICT DO NOTHING</code>이라 중복되지 않고, <code>user_status</code>는 사용자마다 마지막 값만 씁니다.</li>
+      <li>DB가 꺼져 있으면 큐에 쌓아 두고(최대 1만 건) 다시 연결되면 씁니다.</li>
+      <li>10초(<code>sweep_sec</code>)마다 만료된 RATE 임시 차단을 <code>expired</code>로 바꿉니다.</li>
+    </ul>
+    <h4>읽기: read_events / row_to_event (점수 복원)</h4>
+    <p><code>bola_events</code>에서 스트림 ID 형식(<code>숫자-숫자</code>)의 행만, ID를 숫자로 나눠 정렬해서 서버 측 커서로 2,000건씩 읽습니다. 각 행을 Redis 이벤트 모양(<code>kind</code>, <code>uri</code>, <code>detail</code> 등)으로 되돌려 <code>handle()</code>에 넣습니다.</p>
+    <div class="tablewrap">
+    <table>
+      <tr><th>테이블</th><th>한 행</th><th>pc3에서</th></tr>
+      <tr><td><code>bola_events</code></td><td>Redis 이벤트 1건 + 그 시점의 점수·판단 + 조치(<code>AC-…-R</code> 임시, <code>AC-…-L</code> 영구)</td><td>탐지·조치 이력</td></tr>
+      <tr><td><code>user_status</code></td><td>사용자 1명의 현재 상태와 점수</td><td>지금 위험한 사용자</td></tr>
+      <tr><td><code>alerts</code></td><td>보낸 Slack 알림 (중복 방지 키)</td><td>알림 이력</td></tr>
+    </table>
+    </div>
+  </div>
+
+  <!-- ===================================================== 5 -->
+  <h2 id="scenario">5. 시나리오: 사용자 7이 남의 회원 정보를 조회</h2>
+  <p>사용자 7이 <code>GET /members/3</code>, <code>/members/4</code>, <code>/members/5</code>를 몇 초 간격으로 보내고, 모두 200 응답을 받습니다.</p>
+  <ol class="steps">
+    <li><span class="n">1</span><div class="where">pc2 Kong</div>
+      <div class="what">요청 처리, 접근 로그 기록</div>
+      <p><code>{"user_id":"7","role":"user","uri":"/members/3","status":200,"request_id":"a1…"}</code></p></li>
+    <li><span class="n">2</span><div class="where">pc2 Fluent Bit → pc1 portproxy → bola-realtime:5170</div>
+      <div class="what">mTLS로 전송, 인증서 확인 후 <code>Handler</code>가 한 줄 수신</div></li>
+    <li><span class="n">3</span><div class="where">realtime.py · process → judge</div>
+      <div class="what">장부상 <code>/members/3</code>의 주인은 3, 요청자는 7 → <code>BOLA</code></div>
+      <p><code>[BOLA   ] GET /members/{id}  요청자 7 -> 3 (주인 3)</code> 출력, Redis에 <code>XADD</code>. 10초에 3건이라 임시 차단 기준(10건 초과)에는 못 미칩니다.</p></li>
+    <li><span class="n">4</span><div class="where">judge.py · consume → handle</div>
+      <div class="what"><code>XREADGROUP</code>으로 수신 → <code>parse_event</code> → <code>Judge.process</code></div></li>
+    <li><span class="n">5</span><div class="where">scoring.py · classify</div>
+      <div class="what"><code>/members/{id}</code>는 api_infer가 1대1로 추론한 API → <code>BOLA_PATH</code> +40, 피해자 3</div>
+      <p>URL로 확인된 BOLA라서 이 요청은 바로 <code>requests</code>에 확정됩니다(store.py). 점수 40 → <code>watch</code>. 이 API에서 처음 성공한 BOLA라면 notifier.py가 개발자 채널에 "GET /members/{id} 취약" 알림을 보냅니다.</p></li>
+    <li><span class="n">6</span><div class="where">두 번째 요청 /members/4</div>
+      <div class="what">80점 → <code>warning</code> 단계로 올라감</div>
+      <p>notifier.py가 관리자 채널에 warning 알림을 큐에 넣습니다 (사용자·단계마다 한 번).</p></li>
+    <li><span class="n">7</span><div class="where">세 번째 요청 /members/5</div>
+      <div class="what">40×3 = 120 + 피해자 3명 보너스 30 = <b>150점 → 확정</b></div>
+      <p>store.py가 <code>confirmed.json</code>의 <code>users</code>에 7을 추가하고 <code>confirmed_log.jsonl</code>에 근거를 남깁니다. blocker.py는 <code>blocked:user:7</code>을 영구로 겁니다. notifier.py는 관리자 채널에 확정과 영구 차단 결과를 알립니다.</p></li>
+    <li><span class="n">8</span><div class="where">db.py · 저장 스레드 (1초 안)</div>
+      <div class="what"><code>bola_events</code> 3행 + <code>user_status</code> 사용자 7 = <code>confirmed</code>, 150점</div>
+      <p>마지막 행에 조치 <code>AC-&lt;스트림ID&gt;-L applied</code>가 기록됩니다.</p></li>
+    <li><span class="n">9</span><div class="where">pc2 Kong</div>
+      <div class="what">사용자 7의 다음 요청부터 403 <code>blocked by security policy</code></div>
+      <p>로그에 <code>"blocked": true</code>가 붙으므로 realtime.py는 이 요청을 판정하지 않습니다.</p></li>
+    <li><span class="n">10</span><div class="where">pc3 Streamlit</div>
+      <div class="what">확정·조치 목록에 사용자 7 표시</div></li>
+  </ol>
+
+  <div class="score">
+    <div class="scale"><div></div><div><i style="left:20%">30 watch</i><i style="left:40%">60 warning</i><i style="left:66.7%">100 확정</i></div><div></div></div>
+    <div class="row"><div>/members/3</div><div class="bar"><span style="width:26.7%;background:var(--accent)"></span></div><div class="lv" style="color:var(--accent)">40 watch</div></div>
+    <div class="row"><div>/members/4</div><div class="bar"><span style="width:53.3%;background:var(--warn)"></span></div><div class="lv" style="color:var(--warn)">80 warning</div></div>
+    <div class="row"><div>/members/5</div><div class="bar"><span style="width:100%;background:var(--bad)"></span></div><div class="lv" style="color:var(--bad)">150 확정</div></div>
+  </div>
+
+<pre>judge 로그
+[점수] 15:10:02 사용자 7 BOLA 200 /members/3 → BOLA_PATH +40 = 40/100점 {'BOLA_PATH': 40} 피해자 ['3']
+[점수] 15:10:05 사용자 7 BOLA 200 /members/4 → BOLA_PATH +40 = 80/100점 {'BOLA_PATH': 80} 피해자 ['3', '4']
+[점수] 15:10:09 사용자 7 BOLA 200 /members/5 → BOLA_PATH +40 = 150/100점 {'BOLA_PATH': 120, '+victims': 30} …  ★ 확정
+[확정] 사용자 7 점수 150 {'BOLA_PATH': 120, '+victims': 30} 피해자 ['3', '4', '5'] 요청 3건
+        털린 API: GET /members/{id} {3,4,5}</pre>
+
+  <div class="note warnnote">빠르게 공격하면 경로가 달라집니다. 10초에 10번을 넘으면 realtime.py가 먼저 <b>10분 임시 차단</b>(RATE)을 걸고, judge는 RATE +10점을 더합니다. 10분 안에 100점에 도달하면 blocker.py가 같은 키를 영구 차단으로 바꿉니다.</div>
+
+  <!-- ===================================================== 6 -->
+  <h2 id="ops">6. 운영 도구</h2>
+
+  <div class="file">
+    <header><span class="path">judge/notifier.py</span><span class="tag t-jd">모듈 · 수동 --test</span>
+      <span class="role">Slack 알림 (판단을 막지 않음)</span></header>
+    <div class="tablewrap">
+    <table>
+      <tr><th>채널</th><th>종류</th><th>언제</th><th>중복 방지 키</th></tr>
+      <tr><td>관리자</td><td>warning / attack</td><td>사용자 단계가 올라갈 때</td><td><code>user:7:attack:r&lt;해제시각&gt;</code></td></tr>
+      <tr><td>관리자</td><td>rate</td><td>RATE 임시 차단</td><td>사용자마다 하루 한 번</td></tr>
+      <tr><td>관리자</td><td>release</td><td><code>unblock.py</code> 실행</td><td>-</td></tr>
+      <tr><td>개발자</td><td>api</td><td>API에서 BOLA가 처음 성공, 또는 7일 동안 조용하다가 다시 성공 (사용자 번호는 넣지 않음)</td><td>API + 시각</td></tr>
+      <tr><td>둘 다</td><td>summary</td><td>매시 정각에 직전 1시간 요약 (judge 생존 신호 역할)</td><td>시간대</td></tr>
+    </table>
+    </div>
+    <p>보낸 알림은 <code>alerts</code> 테이블에 키로 남겨서 재시작해도 다시 보내지 않습니다. 실패하면 2, 4, 8, 16초 간격으로 최대 5번까지 다시 시도합니다.</p>
+  </div>
+
+  <div class="file">
+    <header><span class="path">judge/unblock.py</span><span class="tag t-tool">수동 · 관리자</span>
+      <span class="role">오탐일 때 영구 차단 해제</span></header>
+<pre>docker compose stop judge          # 켜져 있으면 거부 (judge가 메모리 명단으로 다시 덮어쓰므로)
+docker compose run --rm judge python unblock.py 7 --by 관리자 --note "본인 주문, 장부 오류"
+docker compose start judge
+docker compose exec judge python unblock.py --list     # 목록 보기는 켜져 있어도 됨</pre>
+    <ol>
+      <li>Redis <code>blocked:user:7</code>, <code>block:info:7</code> 삭제 → 다음 요청부터 Kong 통과</li>
+      <li><code>confirmed.json</code>: <code>users</code>에서 빼고 <code>released</code>에 해제 시각 기록 (요청 ID는 학습 제외용으로 남김)</li>
+      <li><code>confirmed_log.jsonl</code>에 누가, 언제, 왜 해제했는지 기록</li>
+      <li>DB: 확정 조치 → <code>released</code>, <code>user_status</code> → <code>normal</code></li>
+      <li>Slack 관리자 채널에 해제 기록 전송</li>
+    </ol>
+  </div>
+
+  <div class="file">
+    <header><span class="path">attack/simulate.py</span><span class="tag t-tool">수동 · 검증용</span>
+      <span class="role">본인 테스트 앱에 GET 조회로 BOLA 공격을 재현</span></header>
+    <div class="tablewrap">
+    <table>
+      <tr><th>패턴</th><th>속도</th><th>확인하는 것</th></tr>
+      <tr><td><code>burst</code></td><td>1초에 1,000번</td><td>RATE 임시 차단(403)이 몇 번째에 걸리나</td></tr>
+      <tr><td><code>steady</code></td><td>10초에 30번</td><td>임시 차단 경계 (10초 10회)</td></tr>
+      <tr><td><code>slow</code></td><td>5분에 3번</td><td>RATE에 안 걸려도 점수가 쌓여 확정·영구 차단되나</td></tr>
+      <tr><td><code>rotate</code></td><td>계정을 바꿔 가며</td><td>계정별 차단, 피해자를 다른 계정이 이어받는지</td></tr>
+    </table>
+    </div>
+    <p>요청마다 결과를 <code>attack/results/*.csv</code>에 남깁니다. 403 중 본문이 <code>blocked by security policy</code>인 것을 Kong 차단으로 구분합니다.</p>
+  </div>
+
+  <!-- ===================================================== 7 -->
+  <h2 id="cases">7. 상황별 동작</h2>
+  <div class="tablewrap">
+  <table>
+    <tr><th>상황</th><th>동작하는 파일</th><th>결과</th></tr>
+    <tr><td>judge 재시작</td><td>judge.py <code>rebuild_db</code> → <code>rebuild</code></td><td>DB 전체로 누적 점수 복원, Redis는 DB 이후만 보충. 복원분은 다시 기록하거나 알리지 않음</td></tr>
+    <tr><td>Redis가 늦게 켜짐</td><td>judge.py <code>main</code></td><td>죽지 않고 3초마다 재시도 (연결 거부, 시간 초과 모두)</td></tr>
+    <tr><td>DB가 꺼짐</td><td>db.py <code>DbWriter</code></td><td>판단·차단은 계속하고 기록은 큐에 보관. 재시작할 때 DB를 못 읽으면 Redis만으로 복원</td></tr>
+    <tr><td>Redis가 통째로 초기화됨</td><td>blocker.py <code>sync</code></td><td>60초 안에 <code>confirmed.json</code> 명단으로 영구 차단 키 복구</td></tr>
+    <tr><td>장부 갱신 (<code>ledger.json</code> 교체)</td><td>realtime.py <code>reload_ledger</code>, judge.py <code>refresh_path_owners</code></td><td>60초 안에 자동 반영, 1대1 API 다시 추론</td></tr>
+    <tr><td>본인 번호인데 BOLA로 보고됨</td><td>scoring.py <code>classify</code></td><td>장부 오탐으로 보고 점수 0, DB <code>decision = ignored</code></td></tr>
+    <tr><td>정상 사용자 차단 (오탐)</td><td>unblock.py</td><td>차단 해제, 해제 이전 이벤트로는 다시 확정하지 않음</td></tr>
+    <tr><td>테스트 초기화 (db,log 정리)</td><td>수동</td><td>judge 중지 → DB 3개 테이블, Redis 차단 키와 스트림, 명단과 로그 파일 비우기 → judge 재생성. 점수 0부터 시작</td></tr>
+  </table>
+  </div>
+
+  <!-- ===================================================== 8 -->
+  <h2 id="where">8. 어디서 확인하나</h2>
+  <div class="tablewrap">
+  <table>
+    <tr><th>알고 싶은 것</th><th>위치</th></tr>
+    <tr><td>무엇이 의심으로 판정됐나 (realtime.py)</td><td><code>docker compose logs -f realtime</code></td></tr>
+    <tr><td>점수, 확정, 차단 (judge.py)</td><td><code>docker compose logs -f judge</code>, <code>judge/output/score_log.jsonl</code></td></tr>
+    <tr><td>확정·해제 근거 (store.py)</td><td><code>judge/output/confirmed_log.jsonl</code></td></tr>
+    <tr><td>털린 API 요약</td><td><code>judge/output/breached_apis.json</code></td></tr>
+    <tr><td>지금 차단된 사용자 (blocker.py)</td><td><code>docker compose exec judge python unblock.py --list</code></td></tr>
+    <tr><td>전체 이력 (db.py)</td><td>PostgreSQL <code>bola_events</code>, <code>user_status</code>, <code>alerts</code> (pc3 대시보드)</td></tr>
+  </table>
+  </div>
+  <p class="sub" style="margin-top:16px">모든 <code>docker compose</code> 명령은 WSL에서 <code>cd /mnt/d/python-rule</code> 한 뒤 실행합니다.</p>
+</main>
+</body>
+</html>

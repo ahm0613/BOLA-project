@@ -3,7 +3,7 @@
 역할: 판단 서버의 핵심 로직. Redis·파일을 모르고 이벤트 dict만 다룬다 (테스트하기 쉽게).
   Judge.process(이벤트) → 이번에 새로 생긴 확정 목록 [{"type": "user"|"request", ...}]
 
-점수 (최근 window_sec 동안, config.json에서 조정)
+점수 (config.json에서 조정. window_sec 동안 합산, window_sec이 0이면 기간 제한 없이 누적)
   BOLA_PATH    /members/{id} 처럼 URL 숫자가 곧 사용자 번호인 API에서 남의 번호 → 확실
   BOLA_LEDGER  그 밖의 BOLA (realtime.py 장부 근거, 장부가 틀릴 수 있음)
   *_WRITE      위 BOLA를 PUT/PATCH/DELETE(남의 객체 수정·삭제)로 한 경우 → 조회보다 위험하므로 더 높은 점수
@@ -77,7 +77,8 @@ class Judge:
     def __init__(self, cfg, confirmed_users=None, released=None):
         """cfg: config.json 내용. confirmed_users: 이미 확정된 사용자 (재시작 시 confirmed.json에서)
         released: 관리자가 해제한 사용자 → 해제 시각(ms). 그 이전 이벤트는 채점하지 않음 (다시 확정되지 않게)"""
-        self.window_ms = int(cfg["window_sec"]) * 1000
+        self.window_ms = int(cfg.get("window_sec") or 0) * 1000    # 0 = 영구 누적 (오래된 이벤트를 빼지 않음)
+        self.window_label = f"{self.window_ms // 3600000}시간" if self.window_ms else "누적"   # 판단 사유 문구용
         self.threshold = cfg["threshold"]
         self.points = cfg["points"]
         self.bonus = cfg["bonus"]
@@ -184,7 +185,7 @@ class Judge:
 
         q = self.recent.setdefault(me, deque())
         q.append({"ts": e["ts"], "item": item, "victim": victim, "api": e["api"], "request_id": rid, "uri": e["uri"]})
-        while q and q[0]["ts"] < e["ts"] - self.window_ms:
+        while self.window_ms and q and q[0]["ts"] < e["ts"] - self.window_ms:
             q.popleft()
         total, breakdown, victims, apis = self.score(q)
         self.scores[me] = self.last["score"] = total
@@ -196,7 +197,7 @@ class Judge:
             self.level[me] = rank
             need = self.levels[rank - 1][1]
             self.last["level_up"] = {"decision": self.level_name(rank), "need": need,
-                                     "reason": f"{self.window_ms // 3600000}시간 점수 {total}점 ≥ "
+                                     "reason": f"{self.window_label} 점수 {total}점 ≥ "
                                                f"{self.level_name(rank)} 기준 {need}점"}
         if total < self.threshold:
             return out
@@ -214,7 +215,7 @@ class Judge:
             "apis_hit": self.user_hits(me),
             "events": len(q),
             "request_ids": [x["request_id"] for x in q if x["request_id"]],
-            "reason": f"{self.window_ms // 3600000}시간 점수 {total} ≥ {self.threshold}",
+            "reason": f"{self.window_label} 점수 {total} ≥ {self.threshold}",
         })
         self.recent.pop(me, None)
         return out

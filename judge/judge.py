@@ -1,8 +1,8 @@
 """판단 서버: Redis bola:events(realtime.py가 보낸 의심 이벤트)를 읽어 점수를 매기고 공격자를 확정해 confirmed.json을 만듦
 
   python judge.py                 계속 실행: judges 그룹으로 새 이벤트를 받아 처리 (Ctrl+C로 종료)
-  python judge.py --once          한 번 계산: 최근 window_sec(24시간) 이벤트로 계산 후 종료 (그룹은 건드리지 않음)
-  python judge.py --once --all    스트림 전체로 한 번 계산
+  python judge.py --once          한 번 계산: 점수 복원과 같은 범위(아래)로 계산 후 종료 (그룹은 건드리지 않음)
+  python judge.py --once --all    window_sec과 상관없이 DB·스트림 전체로 한 번 계산
   python judge.py --once --dry-run  계산 결과만 보여 주고 confirmed.json은 쓰지 않음
   python judge.py --once --all --dry-run --trace   과거 이벤트가 어떻게 채점됐는지 한 줄씩 보기
   python judge.py --quiet         실시간 모드에서 이벤트마다 나오는 점수 줄을 끔
@@ -18,7 +18,11 @@ DB 기록 (pc3 Streamlit용, db.py): Redis 이벤트 한 건마다 bola_events �
 Slack 알림 (notifier.py, config.json의 notify): 관리자에게 주의 사용자(warning, 확정, RATE), 개발자에게 취약 API,
   매시 정각 1시간 요약. 웹훅 주소는 .env의 SLACK_ADMIN_WEBHOOK, SLACK_DEV_WEBHOOK. 복원 중, --once, --dry-run이면 보내지 않음.
 
-시작할 때 최근 window_sec 이벤트를 다시 읽어 점수를 복원한 뒤, 그 다음 이벤트부터 그룹으로 받는다.
+점수 복원: 시작할 때 과거 이벤트를 다시 채점한 뒤, 그 다음 이벤트부터 그룹으로 받는다.
+  범위는 window_sec(최근 N초), window_sec이 0이면 전체(영구 누적)
+  ① PostgreSQL bola_events (config.json db.restore, 기본 켜짐) → Redis 스트림이 잘라 낸 옛 이벤트까지 복원
+  ② Redis 스트림에서 ①의 마지막 이벤트 이후만 보충 (DB에 아직 못 쓴 것). DB를 못 읽으면 Redis만으로 복원
+  ①로 복원한 이벤트는 이미 DB에 있으므로 다시 쓰지 않는다.
 (복원에서 이미 본 이벤트가 그룹으로 다시 오면 점수에 두 번 넣지 않고 ACK만 한다)
 접속 정보: config.json의 redis.*, 비밀번호는 .env의 REDIS_PASSWORD (없으면 비밀번호 없이 접속)
 """
@@ -118,7 +122,8 @@ class Server:
         self.cfg = cfg
         rc = cfg["redis"]
         self.r = redis.Redis(host=rc["host"], port=rc["port"], password=rc["password"], decode_responses=True,
-                             socket_timeout=10, socket_keepalive=True)    # block(5초)보다 길게
+                             socket_timeout=10, socket_keepalive=True,    # block(5초)보다 길게
+                             socket_connect_timeout=5)    # 연결은 짧게: Redis가 꺼져 있으면 빨리 알고 다시 시도
         self.stream, self.group, self.me = rc["stream"], rc["group"], rc["consumer"]
         self.store = ConfirmedStore(cfg["paths"]["confirmed"], None if dry_run else cfg["paths"]["log"])
         self.judge = Judge(cfg, confirmed_users=self.store.users.keys(), released=self.store.released)
@@ -132,6 +137,8 @@ class Server:
         self.breached_path = None if dry_run else cfg["paths"].get("breached")
         self.saved_hits = 0                             # breached_apis.json을 마지막으로 저장할 때의 hits 수
         self.db = make_db(cfg, dry_run)
+        self.restore_db = (cfg.get("db") or {}).get("restore", True)   # 점수 복원을 PostgreSQL에서 (dry-run도 읽기는 함)
+        self.replaying = False                          # True: DB에서 복원 중 → 이미 DB에 있는 행이라 다시 쓰지 않음
         self.rate_sec = (cfg.get("db") or {}).get("rate_block_sec", 600)   # realtime.py의 RATE 임시 차단 길이
         self.user_state = {}                              # user_id → (사용자 상태, 그 상태로 바뀐 시각)
         bc = cfg.get("block") or {}
@@ -271,7 +278,7 @@ class Server:
                 self.notifier.on_scored(self.judge.last, decisions, blocked, self.judge)
             except Exception as err:                    # 알림 문제로 판단이 멈추지 않게
                 print(f"[알림] 처리 실패: {err}", flush=True)
-        if self.db:
+        if self.db and not self.replaying:
             self.record_db(stream_id, decisions, saved, blocked)
         return True
 
@@ -298,7 +305,7 @@ class Server:
         else:
             decision = t["level"]
             reason = t["level_up"]["reason"] if t.get("level_up") else \
-                f"{self.judge.window_ms // 3600000}시간 점수 {t['total']}점 → {decision} 단계 유지"
+                f"{self.judge.window_label} 점수 {t['total']}점 → {decision} 단계 유지"
             status = USER_STATUS[decision]
         if self.user_state.get(u, (None,))[0] != status:    # 상태 값이 바뀐 시각만 기억 (점수만 바뀌면 그대로)
             self.user_state[u] = (status, now)
@@ -371,9 +378,43 @@ class Server:
             with open(self.score_log, "a", encoding="utf-8") as f:
                 f.write(json.dumps({"stream_id": stream_id, "time": when, **t}, ensure_ascii=False) + "\n")
 
+    def restore_since_ms(self, all_events=False):
+        """복원 시작 시각(ms). 전체면 None (--all 또는 window_sec 0 = 영구 누적)"""
+        if all_events or not self.judge.window_ms:
+            return None
+        return int(time.time() * 1000) - self.judge.window_ms
+
+    def rebuild_db(self, all_events=False):
+        """PostgreSQL bola_events로 점수 복원 (Redis보다 먼저). 채점한 건수, DB를 쓰지 않으면 None
+        중간에 실패해도 그때까지 복원한 것은 유지 → 나머지는 rebuild()가 Redis에서 이어서 읽음"""
+        dsn = db.dsn_from_env() if self.restore_db else None
+        if not dsn:
+            return None
+        since = self.restore_since_ms(all_events)
+        n = 0
+        self.replaying = True
+        try:
+            for sid, fields, (status, changed_at) in db.read_events(dsn, None if since is None else to_dt(since)):
+                if self.handle(sid, fields):
+                    n += 1
+                if status and changed_at:               # 상태 변경 시각을 이어받음 (재시작 뒤 첫 이벤트가 시각을 덮지 않게)
+                    self.user_state[fields["user_id"]] = (status, changed_at)
+        except Exception as err:                        # DB가 꺼져 있음 등 → Redis만으로 복원
+            print(f"[복원] DB에서 읽기 실패 ({n}건까지 반영), 나머지는 Redis에서: {err}", flush=True)
+            if not n:
+                return None
+        finally:
+            self.replaying = False
+        return n
+
     def rebuild(self, all_events=False):
-        """최근 window_sec(또는 전체) 이벤트를 XRANGE로 읽어 점수 복원. 읽은 건수 반환"""
-        start = "-" if all_events else f"{int(time.time() * 1000) - self.judge.window_ms}-0"
+        """Redis 스트림을 XRANGE로 읽어 점수 복원. 읽은 건수 반환
+        rebuild_db()가 먼저 돌았으면 그 마지막 이벤트 이후만 (DB에 아직 못 쓴 것), 아니면 복원 범위 전체"""
+        since = self.restore_since_ms(all_events)
+        if self.last_id > (0, 0):
+            start = f"{self.last_id[0]}-{self.last_id[1]}"     # 이 ID 자체는 아래에서 걸러짐
+        else:
+            start = "-" if since is None else f"{since}-0"
         n = 0
         while True:
             rows = self.r.xrange(self.stream, min=start, max="+", count=1000)
@@ -454,7 +495,7 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")        # Windows 콘솔에서 한글 깨짐 방지
     p = argparse.ArgumentParser(description="BOLA 판단 서버: Redis 이벤트 → 점수 → confirmed.json")
     p.add_argument("--once", action="store_true", help="한 번 계산하고 종료 (그룹·ACK 사용 안 함)")
-    p.add_argument("--all", action="store_true", help="--once와 함께: 스트림 전체로 계산")
+    p.add_argument("--all", action="store_true", help="window_sec과 상관없이 DB·스트림 전체로 복원 (--once와 함께 주로 씀)")
     p.add_argument("--dry-run", action="store_true", help="confirmed.json을 쓰지 않고 결과만 출력")
     p.add_argument("--trace", action="store_true", help="시작할 때 복원하는 과거 이벤트도 점수 줄을 출력")
     p.add_argument("--quiet", action="store_true", help="실시간 모드에서 이벤트마다 점수 줄을 출력하지 않음")
@@ -468,16 +509,21 @@ def main():
     print(f"[시작] Redis {rc['host']}:{rc['port']} {rc['stream']} → {cfg['paths']['confirmed']}"
           f"{' (dry-run)' if args.dry_run else ''} | 영구 차단 {'켜짐' if srv.blocker else '꺼짐'}", flush=True)
 
-    while True:                                         # 시작할 때 Redis가 아직 안 떠 있어도 기다림
+    scope = "전체" if srv.restore_since_ms(args.all) is None else f"최근 {srv.judge.window_label}"
+    n_db = srv.rebuild_db(all_events=args.all)          # ① DB (Redis 재시도와 따로: 기다리는 동안 DB를 다시 읽지 않게)
+    while True:                                         # ② Redis. 시작할 때 Redis가 아직 안 떠 있어도 기다림
         try:
             n = srv.rebuild(all_events=args.all)
             break
         except redis.AuthenticationError as err:        # 비밀번호 문제는 기다려도 안 풀림 → 바로 안내하고 종료
             sys.exit(f"[Redis] 인증 실패: {err}\n  → judge/.env의 REDIS_PASSWORD를 확인하세요")
-        except redis.ConnectionError as err:
+        except (redis.ConnectionError, redis.TimeoutError) as err:   # TimeoutError는 ConnectionError의 하위가 아님
             print(f"[Redis] 연결 안 됨, 3초 뒤 다시 시도: {err}", flush=True)
             time.sleep(3)
-    print(f"[복원] 최근 이벤트 {n}건 채점", flush=True)
+    if n_db is None:
+        print(f"[복원] {scope} 이벤트: Redis {n}건 채점 (DB 복원 안 함)", flush=True)
+    else:
+        print(f"[복원] {scope} 이벤트: DB {n_db}건 + Redis 보충 {n}건 채점", flush=True)
     if args.once:
         if srv.db:
             srv.db.close()                              # 남은 DB 기록을 다 쓰고 끝냄
@@ -495,7 +541,7 @@ def main():
         while True:
             try:
                 srv.consume()
-            except redis.ConnectionError as err:        # Redis 재시작·네트워크 끊김 → 잠깐 쉬고 다시
+            except (redis.ConnectionError, redis.TimeoutError) as err:   # Redis 재시작·네트워크 끊김 → 잠깐 쉬고 다시
                 print(f"[Redis] 연결 끊김, 3초 뒤 다시 시도: {err}", flush=True)
                 time.sleep(3)
     except KeyboardInterrupt:

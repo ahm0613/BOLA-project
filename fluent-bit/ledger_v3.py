@@ -20,8 +20,13 @@
   python ledger_v3.py --truth ..\\data\\attacks_truth.csv   정답지와 비교 (가짜 로그 시험용)
   python ledger_v3.py --min-victims 3      의심 기준 (서로 다른 피해자 수)
 
+1대1 API (URL 번호 = 사용자 번호): 판단 서버 config.json의 path_owners와 같은 기준
+  - "auto"(기본)  judge/api_infer.py로 1차 장부(ledger.json)를 보고 추론 (판단 서버와 같은 함수·같은 path_infer 설정)
+  - 목록          그 목록 그대로. []이면 URL 판단을 끔
+  - 설정 없음     DEFAULT_PATH_OWNERS
+
 의심 사용자 판정 (사용자별로 30일치를 모아서)
-  - URL 번호가 곧 사용자 번호인 API(/members/{id}, /profiles/{id})에서 남의 번호 → 확실한 남의 것 (장부를 보지 않음)
+  - 1대1 API(예: /members/{id}, /profiles/{id})에서 남의 번호 → 확실한 남의 것 (장부를 보지 않음)
   - 그 밖의 API에서 ledger.json의 주인이 요청자가 아님 → 남의 것 (주인이 null인 객체는 셀 수 없음)
   - 서로 다른 피해자(주인)가 --min-victims명 이상이면 의심 사용자
   - 403/404만 낸 사용자(시도만 함)는 ledger_days에 없어서 찾을 수 없음 (상태 200 요청만 집계됨)
@@ -71,9 +76,22 @@ def load_judge_config():
         return {}
 
 
-def path_owner_prefixes(cfg):
-    """URL 번호 = 사용자 번호인 경로 (판단 서버 config.json의 path_owners와 같게). 예: [["members", "{id}"], ...]"""
-    owners = cfg.get("path_owners") or DEFAULT_PATH_OWNERS
+def resolve_path_owners(cfg, ledger):
+    """1대1 API 목록과 화면에 보여 줄 설명 줄. 판단 서버(judge.py)와 같은 규칙:
+    "auto" → api_infer.infer(장부), 목록 → 그대로 ([]면 끔), 설정 없음 → DEFAULT_PATH_OWNERS"""
+    po = cfg.get("path_owners")
+    if po == "auto":
+        sys.path.insert(0, os.path.abspath(JUDGE_DIR))
+        import api_infer                                  # judge/api_infer.py (판단 서버와 같은 추론)
+        owners, stats = api_infer.infer(ledger, **{**api_infer.DEFAULTS, **(cfg.get("path_infer") or {})})
+        return owners, api_infer.describe(owners, stats)
+    if isinstance(po, list):
+        return list(po), [f"[1대1] config.json path_owners 목록 그대로: {po}"]
+    return list(DEFAULT_PATH_OWNERS), [f"[1대1] config.json에 path_owners가 없어 기본값: {DEFAULT_PATH_OWNERS}"]
+
+
+def path_owner_prefixes(owners):
+    """1대1 API 목록 → 경로 조각. ["/members/{id}"] → [["members", "{id}"]]"""
     return [[s for s in p.split("/") if s] for p in owners]
 
 
@@ -318,9 +336,14 @@ def main():
     if not os.path.exists(args.log):
         sys.exit(f"원본 로그 {args.log}가 없습니다. --log로 지정하세요")
     day_set = {d for d, _ in days}
-    prefixes = path_owner_prefixes(cfg)
     ledger = load_ledger(args.ledger)
     print(f"학습 데이터 {days_dir} ({days[0][0]} ~ {days[-1][0]}, {len(days)}일) | 1차 장부 {args.ledger}")
+
+    # ⓪ 1대1 API: URL 번호로 주인을 판단할 API (판단 서버와 같은 기준)
+    owners, lines = resolve_path_owners(cfg, ledger)
+    print()
+    print("\n".join(lines))
+    prefixes = path_owner_prefixes(owners)
 
     # ① 의심 사용자 찾기
     stats, suspects = find_suspects(ledger, days, prefixes, args.min_victims)
