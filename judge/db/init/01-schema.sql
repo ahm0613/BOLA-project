@@ -16,11 +16,12 @@ CREATE TABLE bola_events (
   detection_reasons      JSONB NOT NULL,       -- 탐지 근거: detail(장부 비교 결과) + 판단 서버 분류·점수·피해자
 
   -- 판단 서버 (이 이벤트까지 반영한 그 시점의 값)
-  risk_score             INT,                  -- 위험도 점수 (config.json window_sec 동안의 합계, 0이면 전체 누적). 판단 서버 시작 전에 확정된 사용자는 NULL
+  risk_score             INT,                  -- 차단 근거 점수 (config.json window_sec 동안의 합계, 0이면 전체 누적). 100점을 넘을 수 있음. 판단 서버 시작 전에 확정된 사용자는 NULL
+  risk_pct               INT,                  -- 위험도(%) = min(risk_score ÷ 차단 기준 100점, 1) × 100. 차단된 사용자는 100. 화면에는 이 값을 보여 줌
   assessed_at            TIMESTAMPTZ NOT NULL, -- 위험도 산정 시각
-  decision               TEXT NOT NULL,        -- normal / watch / warning / attack / ignored(본인 번호 오탐)
+  decision               TEXT NOT NULL,        -- normal(정상) / caution(주의 10) / danger(위험 30) / high(고위험 60) / attack(차단 100) / ignored(본인 번호 오탐)
   decision_reason        TEXT NOT NULL,        -- 최종 판단 근거
-  user_status            TEXT NOT NULL,        -- 사용자 현재 상태: normal / watch / warning / confirmed
+  user_status            TEXT NOT NULL,        -- 사용자 현재 상태: normal / caution / danger / high / confirmed(차단)
   user_status_updated_at TIMESTAMPTZ,          -- 사용자 상태가 마지막으로 바뀐 시각
 
   -- 조치 (있을 때만, 없으면 NULL)
@@ -42,18 +43,19 @@ CREATE INDEX ON bola_events (enforcement_status) WHERE enforcement_status IS NOT
 -- 사용자 현재 상태: 사용자당 1행, 바뀔 때마다 덮어씀 (대시보드의 "지금 위험한 사용자")
 CREATE TABLE user_status (
   user_id                TEXT PRIMARY KEY,
-  user_status            TEXT NOT NULL,        -- normal / watch / warning / confirmed
+  user_status            TEXT NOT NULL,        -- normal / caution / danger / high / confirmed(차단)
   user_status_updated_at TIMESTAMPTZ NOT NULL, -- 상태 값이 마지막으로 바뀐 시각 (점수만 바뀌면 그대로)
-  risk_score             INT,                  -- 마지막 위험도 점수
+  risk_score             INT,                  -- 마지막 차단 근거 점수 (100점을 넘을 수 있음)
+  risk_pct               INT,                  -- 위험도(%) 0~100. 차단이면 100, 관리자 해제하면 0
   last_event_at          TIMESTAMPTZ,          -- 마지막 의심 요청 시각
   last_stream_id         TEXT                  -- 마지막 이벤트 (bola_events.stream_id)
 );
 
 -- Slack 알림 기록 (notifier.py): 같은 alert_key는 한 번만 보냄. 이미 쓰는 DB에는 db/migrate/03-alerts.sql로 추가
 CREATE TABLE alerts (
-  alert_key              TEXT PRIMARY KEY,     -- 중복 방지 키 (예: user:7:warning:r0, rate:7:2026-11-03, api:GET /orders/{id}:<ms>)
+  alert_key              TEXT PRIMARY KEY,     -- 중복 방지 키 (예: user:7:high:r0, rate:7:2026-11-03, api:GET /orders/{id}:<ms>)
   channel                TEXT NOT NULL,        -- admin / dev
-  kind                   TEXT NOT NULL,        -- warning / attack / rate / api / summary / release / import / test
+  kind                   TEXT NOT NULL,        -- high / attack / rate / api / summary / release / import / test
   user_id                TEXT,                 -- 관리자 알림의 사용자 (개발자 알림은 NULL)
   api_path               TEXT,                 -- 개발자 알림의 API
   message                TEXT NOT NULL,        -- 보낸 글

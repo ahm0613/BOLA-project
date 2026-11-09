@@ -17,7 +17,7 @@
      (requests의 요청 ID는 그대로 → 장부 학습에서는 계속 제외)
   3. output/confirmed_log.jsonl: 누가·언제·왜 해제했는지 한 줄
   4. DB(있으면): 그 사용자의 확정 조치(AC-…-L) → enforcement_status = released, released_at = 지금
-                 user_status → normal
+                 user_status → normal, risk_pct → 0 (해제 이전 이벤트는 다시 채점하지 않으므로)
   5. Slack 관리자 채널(SLACK_ADMIN_WEBHOOK이 있으면): 누가·누구를·왜 해제했는지 한 줄
 """
 import argparse
@@ -71,7 +71,7 @@ def update_db(user_id):
                 cur.execute("UPDATE bola_events SET enforcement_status = 'released', released_at = now() "
                             "WHERE user_id = %s AND action_id LIKE %s AND released_at IS NULL", (user_id, "%L"))
                 n = cur.rowcount
-                cur.execute("UPDATE user_status SET user_status = 'normal', user_status_updated_at = now() "
+                cur.execute("UPDATE user_status SET user_status = 'normal', risk_pct = 0, user_status_updated_at = now() "
                             "WHERE user_id = %s", (user_id,))
         print(f"[DB] 확정 조치 {n}건 released, user_status → normal")
     except Exception as err:        # DB 문제로 해제 자체를 실패로 보지 않음

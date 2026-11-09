@@ -15,7 +15,7 @@ DB 기록 (pc3 Streamlit용, db.py): Redis 이벤트 한 건마다 bola_events �
   실시간 모드에서는 시작할 때와 block.sync_sec마다 confirmed.json 명단과 Redis 차단 키를 맞춤 (빠진 키를 다시 걺).
   --dry-run이면 차단하지 않음. 해제는 unblock.py.
 
-Slack 알림 (notifier.py, config.json의 notify): 관리자에게 주의 사용자(warning, 확정, RATE), 개발자에게 취약 API,
+Slack 알림 (notifier.py, config.json의 notify): 관리자에게 주의 사용자(고위험, 확정, RATE), 개발자에게 취약 API,
   매시 정각 1시간 요약. 웹훅 주소는 .env의 SLACK_ADMIN_WEBHOOK, SLACK_DEV_WEBHOOK. 복원 중, --once, --dry-run이면 보내지 않음.
 
 점수 복원: 시작할 때 과거 이벤트를 다시 채점한 뒤, 그 다음 이벤트부터 그룹으로 받는다.
@@ -39,7 +39,7 @@ import api_infer
 import db
 import notifier
 from blocker import Blocker
-from scoring import Judge, parse_event
+from scoring import Judge, level_label, parse_event
 from store import ConfirmedStore
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -75,7 +75,10 @@ def load_config():
     return cfg
 
 
-USER_STATUS = {"normal": "normal", "watch": "watch", "warning": "warning", "attack": "confirmed"}
+def user_status(decision):
+    """판단 단계(decision) → 사용자 상태(user_status). 차단(attack)만 confirmed, 나머지는 단계 이름 그대로
+    단계 이름은 config.json levels (caution / danger / high)"""
+    return "confirmed" if decision == "attack" else decision
 
 
 def make_db(cfg, dry_run):
@@ -219,7 +222,7 @@ class Server:
                 "detected_at": now, "user_id": u, "action_type": "SYNC", "api_path": None,
                 "detection_reasons": {"source": "confirmed.json", "since": since,
                                       "since_time": to_dt(since).isoformat(timespec="seconds") if since else None},
-                "risk_score": None, "assessed_at": now, "decision": "attack",
+                "risk_score": None, "risk_pct": 100, "assessed_at": now, "decision": "attack",
                 "decision_reason": "confirmed.json 확정 명단에 있음 (판단 서버 밖에서 등록, 예: ledger_v3.py)",
                 "user_status": "confirmed", "user_status_updated_at": now,
                 "action_id": f"AC-SYNC-{stamp}-{u}-L",
@@ -228,7 +231,8 @@ class Server:
                 "enforced_at": now if ok else None,
             })
             self.db.put_user({"user_id": u, "user_status": "confirmed", "user_status_updated_at": now,
-                              "risk_score": None, "last_event_at": None, "last_stream_id": f"SYNC-{stamp}-{u}"})
+                              "risk_score": None, "risk_pct": 100,
+                              "last_event_at": None, "last_stream_id": f"SYNC-{stamp}-{u}"})
         if self.notifier:                               # 사용자·시작 시각마다 한 번 (Redis 초기화로 다시 걸어도 다시 안 보냄)
             when = to_dt(since).strftime("%Y-%m-%d %H:%M") if since else "-"
             self.notifier.push(f"sync:{u}:{since}", "admin", "sync",
@@ -299,14 +303,16 @@ class Server:
             decision, reason = "ignored", "URL 번호가 요청자 본인 → 장부 오탐으로 보고 점수에서 제외"
             prev = self.user_state.get(u)
             status = prev[0] if prev else ("confirmed" if u in self.store.users else
-                                           USER_STATUS[self.judge.level_name(self.judge.level.get(u, 0))])
+                                           user_status(self.judge.level_name(self.judge.level.get(u, 0))))
         elif result == "confirmed_user":
             decision, reason, status = "attack", "이미 공격 확정된 사용자 (confirmed.json에 있음)", "confirmed"
         else:
             decision = t["level"]
             reason = t["level_up"]["reason"] if t.get("level_up") else \
-                f"{self.judge.window_label} 점수 {t['total']}점 → {decision} 단계 유지"
-            status = USER_STATUS[decision]
+                f"{self.judge.window_label} 점수 {t['total']}점 → {level_label(decision)} 단계 유지"
+            status = user_status(decision)
+        # 위험도: 차단된 사용자는 100%, 그 밖에는 점수로 (점수가 없으면 NULL)
+        risk_pct = 100 if status == "confirmed" else self.judge.risk_pct(t.get("score"))
         if self.user_state.get(u, (None,))[0] != status:    # 상태 값이 바뀐 시각만 기억 (점수만 바뀌면 그대로)
             self.user_state[u] = (status, now)
 
@@ -344,12 +350,13 @@ class Server:
                 "classified_as": t.get("item"), "points": t.get("points"), "victim": t.get("victim"),
                 "breakdown": t.get("breakdown"), "victims": t.get("victims"), "api_objects": t.get("api_objects"),
             },
-            "risk_score": t.get("score"), "assessed_at": now, "decision": decision, "decision_reason": reason,
+            "risk_score": t.get("score"), "risk_pct": risk_pct, "assessed_at": now,
+            "decision": decision, "decision_reason": reason,
             "user_status": status, "user_status_updated_at": self.user_state[u][1], **action,
         })
         self.db.put_user({
             "user_id": u, "user_status": status, "user_status_updated_at": self.user_state[u][1],
-            "risk_score": t.get("score"), "last_event_at": ts, "last_stream_id": stream_id,
+            "risk_score": t.get("score"), "risk_pct": risk_pct, "last_event_at": ts, "last_stream_id": stream_id,
         })
 
     def write_trace(self, stream_id):
@@ -368,7 +375,7 @@ class Server:
             line = f"{head} 이미 확정된 사용자 → 요청만 confirmed.json에 추가"
         else:
             line = (f"{head} {t['item']} +{t['points']} = {t['total']}/{self.judge.threshold}점 "
-                    f"{t['breakdown']} 피해자 {t['victims']}")
+                    f"(위험도 {t['risk_pct']}% {level_label(t['level'])}) {t['breakdown']} 피해자 {t['victims']}")
             if result == "confirmed":
                 line += "  ★ 확정"
         if t.get("api"):                                # 이 사용자가 이 API에서 지금까지 턴 객체 번호 전체

@@ -78,9 +78,10 @@ pc3  Streamlit ──────────── 몇 초마다 SELECT ──�
 | `detected_at` | 탐지 엔진이 Redis에 올린 시각 = 스트림 ID의 시각 | Redis |
 | `user_id`, `action_type`, `api_path` | 의심 사용자, `kind`(BOLA/ATTEMPT/UNKNOWN/RATE), `api` | Redis |
 | `detection_reasons` (JSON) | `detail`(장부 비교 결과) + 판단 서버 분류(BOLA_PATH 등)·점수·피해자 | Redis + 판단 서버 |
-| `risk_score`, `assessed_at` | 이 이벤트까지 반영한 점수(`window_sec` 동안, 0이면 전체 누적), 계산 시각 | 판단 서버 |
-| `decision`, `decision_reason` | normal / watch(30) / warning(60) / attack(100) / ignored(본인 번호 오탐), 근거 | 판단 서버 |
-| `user_status`, `user_status_updated_at` | 그 시점 사용자 상태(normal/watch/warning/confirmed), 상태가 바뀐 시각 | 판단 서버 |
+| `risk_score`, `assessed_at` | 이 이벤트까지 반영한 **차단 근거 점수**(`window_sec` 동안, 0이면 전체 누적, 100점을 넘을 수 있음), 계산 시각 | 판단 서버 |
+| `risk_pct` | **위험도** 0~100 = min(점수 ÷ 차단 기준 100점, 1) × 100. 차단된 사용자는 100. 화면에는 이 값을 보여 줌 | 판단 서버 |
+| `decision`, `decision_reason` | normal(정상) / caution(주의 10) / danger(위험 30) / high(고위험 60) / attack(차단 100) / ignored(본인 번호 오탐), 근거 | 판단 서버 |
+| `user_status`, `user_status_updated_at` | 그 시점 사용자 상태(normal/caution/danger/high/confirmed), 상태가 바뀐 시각 | 판단 서버 |
 | `action_id`, `action_reason`, `decided_at`, `enforcement_status`, `enforced_at`, `expires_at`, `released_at` | 조치가 있는 이벤트에만 (없으면 NULL) | 판단 서버 |
 
 조치는 실제로 일어나는 두 가지만 기록합니다:
@@ -131,7 +132,7 @@ pc3 ──▶ pc1 192.168.0.40:5432 ──portproxy──▶ WSL 172.22.x.x:5432
 2. pc3 Streamlit 접속 정보: `host=192.168.0.40 port=5432 dbname=bola_judge user=dashboard password=<PG_DASHBOARD_PASSWORD>`
    ```python
    conn = psycopg.connect(host="<pc1 IP>", dbname="bola_judge", user="dashboard", password="...")
-   pd.read_sql("SELECT * FROM user_status ORDER BY risk_score DESC", conn)
+   pd.read_sql("SELECT * FROM user_status ORDER BY risk_pct DESC, risk_score DESC", conn)
    ```
 
 ## Slack 알림 (`notifier.py`)
@@ -140,8 +141,8 @@ pc3 ──▶ pc1 192.168.0.40:5432 ──portproxy──▶ WSL 172.22.x.x:5432
 
 | 채널 (.env) | 알림 | 언제 | 한 번만 보내는 기준 |
 |---|---|---|---|
-| 관리자 `SLACK_ADMIN_WEBHOOK` | warning | 60점을 넘어 단계가 올라갈 때 | 사용자마다 (해제되면 다시) |
-| | attack | 공격 확정·영구 차단 순간 (warning을 건너뛰면 이것만) | 사용자마다 (해제되면 다시) |
+| 관리자 `SLACK_ADMIN_WEBHOOK` | high (고위험) | 위험도 60%(60점)에 이르러 단계가 올라갈 때 | 사용자마다 (해제되면 다시) |
+| | attack (차단) | 공격 확정·영구 차단 순간 (고위험을 건너뛰면 이것만) | 사용자마다 (해제되면 다시) |
 | | RATE | 탐지 엔진의 10분 임시 차단 | 사용자마다 하루 한 번 |
 | | 해제 | `unblock.py` 실행 | 실행할 때마다 |
 | | 1시간 요약 | 매시 정각 + 30초 (일이 없어도 보냄 = 생존 신호) | 시간대마다 |
@@ -205,6 +206,31 @@ docker compose exec -T postgres psql -U postgres -d bola_judge -v judge_user=jud
 | `+multi_api` | 10 | 2개 이상 자원 종류(members, orders, payments…)에서 BOLA |
 
 - **합계 100점 이상이면 사용자 확정** (점수 값은 `config.json`의 `points`에서 조정)
+- 100점은 **최대가 아니라 차단 기준선**입니다. 마지막 요청 점수와 보너스가 한 번에 더해지므로 확정 순간 점수는 100을 넘을 수 있고(예: 80 + 40 + 피해자 30 = 150), 확정된 뒤에는 더 채점하지 않아 그 값에서 멈춥니다. 이 값은 **차단 근거**(`risk_score`)로만 남기고, 화면에는 아래 위험도를 보여 줍니다.
+
+### 위험도와 단계
+
+```
+위험도(%) = min(점수 ÷ 차단 기준(threshold) 100점, 1) × 100      (내림, 차단이면 100)
+
+  점수    0 ──── 10 ──── 30 ──── 60 ──── 100 ──── 150 (차단 근거로만 남음)
+  위험도  0% ─── 10% ─── 30% ─── 60% ─── 100%
+  단계    정상 │ 주의 │ 위험 │ 고위험 │ 차단
+```
+
+| 위험도 | 단계 (`decision` / `user_status`) | 어떤 행동이면 여기 오나 |
+|---|---|---|
+| 0~9% | 정상 `normal` | ATTEMPT(403/404) 1번 |
+| 10~29% | 주의 `caution` | ATTEMPT 2~5번, 장부에 없는 객체 조회 1번 |
+| 30~59% | 위험 `danger` | 남의 것을 1번 조회 |
+| 60~99% | 고위험 `high` | 남의 것을 2번 조회, 또는 URL로 확인된 남의 것을 1번 수정·삭제 → 관리자 Slack 알림 |
+| 100% | 차단 `attack` / `confirmed` | 확실한 BOLA 3번, 쓰기 2번 등 → 영구 차단 |
+
+- 경계는 `config.json`의 `"levels": {"caution": 10, "danger": 30, "high": 60}` (점수 기준, 차단 기준이 100이면 % 기준과 같음). 관리자 알림 단계는 `notify.admin_levels`.
+- 읽기·쓰기 구분은 배점에 들어 있습니다 (조회 30·40점, 수정·삭제 50·60점). URL로 확인된 쓰기(60점)는 한 번에 고위험, 장부 근거 쓰기(50점)는 위험.
+- 경계를 이렇게 정한 이유는 저장소 최상위 `위험도_변경안_20261109.md`의 "3-1. 범위를 이렇게 정한 이유"에 있습니다.
+- 관리자가 `unblock.py`로 해제하면 `user_status = normal`, `risk_pct = 0`.
+- 예전 DB(watch / warning 단계)는 `db/migrate/04-risk.sql`로 열 추가와 이름 변경 (watch → danger, warning → high)
 - **UNKNOWN → BOLA_PATH 승격:** `path_owners` API(/members/{id} 등)에서 장부에 없어 UNKNOWN으로 온 **성공(200/204)** 요청은, URL 번호로 주인을 알 수 있으므로 `BOLA_PATH`(쓰기는 `BOLA_PATH_WRITE`)로 올려 채점합니다.
 - **오탐 거르기:** URL 숫자가 요청자 본인인 BOLA·ATTEMPT·UNKNOWN은 점수를 주지 않습니다. 장부 오염(예: `/members/4`의 주인이 `43`)이나 장부 미학습으로 잘못 보고된 경우를 거릅니다.
 - 피해자(주인)는 이벤트의 `owner` 필드를 쓰고, 없으면 `detail`의 `주인 N`에서 뽑습니다. 그래서 `realtime.py`를 고치지 않아도 됩니다. **단 "털린 API" 표시는 주인이 아니라 실제로 접근한 객체 번호(URL의 숫자)를 보여 줍니다** (예: `GET /orders/{id}` 주인 41이어도 접근한 주문 번호 99로 표시).
@@ -259,9 +285,9 @@ python -m unittest discover tests
 실시간 모드(`python judge.py`)에서는 새 이벤트가 올 때마다 점수가 어떻게 쌓이는지 한 줄씩 보여 줍니다.
 
 ```
-[점수] 18:39:16 사용자 2 BOLA 200 /members/24 → BOLA_PATH +40 = 40/100점 {'BOLA_PATH': 40} 피해자 ['24']
-[점수] 18:39:16 사용자 2 BOLA 200 /members/24/addresses → BOLA_PATH +40 = 80/100점 {'BOLA_PATH': 80} 피해자 ['24']
-[점수] 18:39:22 사용자 2 BOLA 200 /members/3 → BOLA_PATH +40 = 120/100점 {'BOLA_PATH': 120} 피해자 ['24', '3']  ★ 확정
+[점수] 18:39:16 사용자 2 BOLA 200 /members/24 → BOLA_PATH +40 = 40/100점 (위험도 40% 위험) {'BOLA_PATH': 40} 피해자 ['24']
+[점수] 18:39:16 사용자 2 BOLA 200 /members/24/addresses → BOLA_PATH +40 = 80/100점 (위험도 80% 고위험) {'BOLA_PATH': 80} 피해자 ['24']
+[점수] 18:39:22 사용자 2 BOLA 200 /members/3 → BOLA_PATH +40 = 120/100점 (위험도 100% 차단) {'BOLA_PATH': 120} 피해자 ['24', '3']  ★ 확정
 [점수] 18:39:22 사용자 2 BOLA 200 /members/3/addresses → 이미 확정된 사용자 → 요청만 confirmed.json에 추가
 [점수] 10:29:10 사용자 4 BOLA 200 /members/4 → 무시: URL 번호가 본인 (장부 오탐)
 ```

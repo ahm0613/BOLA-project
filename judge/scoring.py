@@ -14,6 +14,11 @@
   보너스: 서로 다른 피해자 여러 명, ATTEMPT 뒤 BOLA 성공, 여러 자원 종류(members·orders…)에서 BOLA
 
 오탐 거르기: URL 숫자가 요청자 본인인 BOLA·ATTEMPT는 점수를 주지 않음 (장부 오염으로 잘못 보고된 경우)
+
+위험도와 단계 (화면·DB용. 확정 판단은 점수로만 함)
+  위험도(%) = min(점수 ÷ threshold, 1) × 100. 100% = 차단. 100점을 넘은 점수(150 등)는 차단 근거로만 남김
+  단계: 정상 normal → 주의 caution(10) → 위험 danger(30) → 고위험 high(60) → 차단 attack(threshold)
+        경계는 config.json의 levels (점수 기준, threshold 100이면 % 기준과 같음)
 """
 import re
 from collections import deque
@@ -22,6 +27,13 @@ NUM = re.compile(r"^\d+$")
 OWNER_IN_DETAIL = re.compile(r"주인 (\d+)")
 WRITE_METHODS = {"PUT", "PATCH", "DELETE"}             # 남의 객체에 쓰기(수정·삭제) = 조회보다 위험
 SUCCESS = (200, 204)                                    # realtime.py와 같음: 데이터를 받아 가거나 지운 요청
+DEFAULT_LEVELS = {"caution": 10, "danger": 30, "high": 60}   # config.json에 levels가 없을 때
+LEVEL_LABELS = {"normal": "정상", "caution": "주의", "danger": "위험", "high": "고위험", "attack": "차단"}
+
+
+def level_label(name):
+    """단계 코드 → 화면·알림용 한국어 이름. 모르는 코드는 그대로"""
+    return LEVEL_LABELS.get(name, name)
 
 
 def sort_ids(ids):
@@ -88,8 +100,9 @@ class Judge:
         self.last = {}                                  # 마지막으로 처리한 이벤트의 채점 결과 (점수 로그용)
         self.hits = {}                                  # 털린 API: user_id → {"GET /members/{id}/addresses": {털린 객체 번호}}
         # 단계: 점수가 낮은 순으로 (이름, 기준). 마지막 attack은 threshold와 같음 (확정)
-        levels = cfg.get("levels") or {"watch": 30, "warning": 60}
+        levels = cfg.get("levels") or DEFAULT_LEVELS
         self.levels = sorted(levels.items(), key=lambda x: x[1]) + [("attack", self.threshold)]
+        self.level_rank = {name: i + 1 for i, (name, _) in enumerate(self.levels)}   # 단계 코드 → 순번 (normal은 0)
         self.level = {}                                 # user_id → 지금까지 올라간 가장 높은 단계 순번 (0=normal)
         self.scores = {}                                # user_id → 마지막으로 계산한 점수 (확정 뒤 이벤트의 risk_score용)
         self.confirmed = set(confirmed_users or [])
@@ -189,8 +202,9 @@ class Judge:
             q.popleft()
         total, breakdown, victims, apis = self.score(q)
         self.scores[me] = self.last["score"] = total
-        rank = sum(1 for _, need in self.levels if total >= need)   # 0=normal, 1=watch, 2=warning, 3=attack
-        self.last.update({"total": total, "breakdown": breakdown, "victims": victims, "events": len(q),
+        rank = sum(1 for _, need in self.levels if total >= need)   # 0=normal, 1=caution … 마지막=attack
+        self.last.update({"total": total, "risk_pct": self.risk_pct(total),
+                          "breakdown": breakdown, "victims": victims, "events": len(q),
                           "first_ts": q[0]["ts"], "level": self.level_name(max(rank, self.level.get(me, 0))),
                           "result": "scored" if total < self.threshold else "confirmed"})
         if rank > self.level.get(me, 0):                 # 단계가 올라갔을 때만 탐지 사건 (내려가는 것은 기록 안 함)
@@ -198,7 +212,7 @@ class Judge:
             need = self.levels[rank - 1][1]
             self.last["level_up"] = {"decision": self.level_name(rank), "need": need,
                                      "reason": f"{self.window_label} 점수 {total}점 ≥ "
-                                               f"{self.level_name(rank)} 기준 {need}점"}
+                                               f"{level_label(self.level_name(rank))} 기준 {need}점"}
         if total < self.threshold:
             return out
 
@@ -221,8 +235,15 @@ class Judge:
         return out
 
     def level_name(self, rank):
-        """단계 순번 → 이름. 0=normal, 1부터 levels 순서 (watch, warning, attack)"""
+        """단계 순번 → 이름. 0=normal, 1부터 levels 순서 (caution, danger, high, attack)"""
         return "normal" if rank <= 0 else self.levels[rank - 1][0]
+
+    def risk_pct(self, score):
+        """점수 → 위험도(%). 차단 기준(threshold)이 100%, 넘어도 100. 점수가 없으면 None
+        내림으로 계산해서 기준에 못 미친 점수가 100%로 보이지 않게 함 (99.9% → 99)"""
+        if score is None:
+            return None
+        return max(0, min(100, int(score) * 100 // self.threshold))
 
     def user_hits(self, user):
         """한 사용자가 턴 API와 털린 객체 번호. {"GET /members/{id}": ["3", "24"], ...}"""

@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BOLA 위험도 정리</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e2e2e0;
+    --accent: #2f6fdb; --warn: #c77700; --bad: #c62f2f; --ok: #1f8a4c; --code: #f0f0ee;
+    --lv0: #1f8a4c; --lv1: #b59a00; --lv2: #d97a00; --lv3: #d0452f; --lv4: #8e1b1b;
+    --lv0-bg: #e6f4ea; --lv1-bg: #fbf5d6; --lv2-bg: #fdebd3; --lv3-bg: #fbe1dc; --lv4-bg: #f1d3d3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161618; --card: #1f1f22; --text: #ececee; --muted: #9a9aa2; --line: #303035;
+      --accent: #6c9cff; --warn: #f0a63a; --bad: #ff6b6b; --ok: #4cc47f; --code: #2a2a2e;
+      --lv0: #4cc47f; --lv1: #e3c84a; --lv2: #f0a63a; --lv3: #ff7a66; --lv4: #ff4d4d;
+      --lv0-bg: #1d3526; --lv1-bg: #3a3418; --lv2-bg: #3d2e1a; --lv3-bg: #45231f; --lv4-bg: #4a1616;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161618; --card: #1f1f22; --text: #ececee; --muted: #9a9aa2; --line: #303035;
+    --accent: #6c9cff; --warn: #f0a63a; --bad: #ff6b6b; --ok: #4cc47f; --code: #2a2a2e;
+    --lv0: #4cc47f; --lv1: #e3c84a; --lv2: #f0a63a; --lv3: #ff7a66; --lv4: #ff4d4d;
+    --lv0-bg: #1d3526; --lv1-bg: #3a3418; --lv2-bg: #3d2e1a; --lv3-bg: #45231f; --lv4-bg: #4a1616;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.65 "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 44px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px;
+         font-family: "D2Coding", Consolas, monospace; }
+  pre { background: var(--code); padding: 12px 14px; border-radius: 8px; overflow-x: auto; font-size: 12.5px;
+        line-height: 1.5; font-family: "D2Coding", Consolas, monospace; margin: 8px 0; }
+  p { margin: 6px 0; }
+  ul, ol { margin: 6px 0; padding-left: 20px; }
+  li { margin: 2px 0; }
+  a { color: var(--accent); }
+
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; font-size: 14px; }
+  nav.toc a { text-decoration: none; }
+  nav.toc ol { columns: 2; column-gap: 24px; margin: 0; }
+  @media (max-width: 600px) { nav.toc ol { columns: 1; } }
+
+  .status { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--ok);
+            border-radius: 8px; padding: 12px 16px; font-size: 14px; margin-bottom: 14px; }
+  .status b { color: var(--ok); }
+
+  .lead { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; font-size: 16px; }
+  .lead .formula { font-family: "D2Coding", Consolas, monospace; font-size: 18px; font-weight: 700; margin: 8px 0 4px; }
+
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--code); font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .tablewrap { overflow-x: auto; margin: 8px 0; border-radius: 8px; }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+  .pill { display: inline-block; padding: 0 9px; border-radius: 10px; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+  .p0 { background: var(--lv0-bg); color: var(--lv0); } .p1 { background: var(--lv1-bg); color: var(--lv1); }
+  .p2 { background: var(--lv2-bg); color: var(--lv2); } .p3 { background: var(--lv3-bg); color: var(--lv3); }
+  .p4 { background: var(--lv4-bg); color: var(--lv4); }
+
+  /* 점수 막대 비교 */
+  .ladder { display: grid; gap: 6px; margin: 10px 0; }
+  .lrow { display: grid; grid-template-columns: 170px 1fr 44px; gap: 10px; align-items: center; font-size: 13.5px; }
+  .lrow .k { font-family: "D2Coding", Consolas, monospace; }
+  .lrow .bar { height: 14px; background: var(--code); border-radius: 7px; position: relative; overflow: hidden; }
+  .lrow .bar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 7px; }
+  .lrow .v { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  @media (max-width: 520px) { .lrow { grid-template-columns: 120px 1fr 36px; } }
+
+  /* 점수 항목 카드 */
+  .items { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 10px 0; }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; font-size: 14px; }
+  .item header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+  .item .name { font-family: "D2Coding", Consolas, monospace; font-weight: 700; font-size: 15px; }
+  .item .pts { font-size: 22px; font-weight: 800; white-space: nowrap; }
+  .item .what { font-weight: 600; margin-bottom: 4px; }
+  .item dl { margin: 6px 0 0; display: grid; grid-template-columns: 58px 1fr; gap: 3px 8px; font-size: 13.5px; }
+  .item dt { color: var(--muted); }
+  .item dd { margin: 0; }
+  .item.c0 { border-top: 4px solid var(--lv0); } .item.c1 { border-top: 4px solid var(--lv1); }
+  .item.c2 { border-top: 4px solid var(--lv2); } .item.c3 { border-top: 4px solid var(--lv3); }
+  .item.c4 { border-top: 4px solid var(--lv4); }
+  @media (max-width: 680px) { .items { grid-template-columns: 1fr; } }
+
+  /* 단계 띠 */
+  .bands { display: grid; grid-template-columns: 10fr 20fr 30fr 40fr 6fr; height: 44px; border-radius: 8px;
+           overflow: hidden; border: 1px solid var(--line); margin: 14px 0 4px; }
+  .bands div { display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff; text-align: center; line-height: 1.2; }
+  .b0 { background: var(--lv0); } .b1 { background: var(--lv1); } .b2 { background: var(--lv2); }
+  .b3 { background: var(--lv3); } .b4 { background: var(--lv4); }
+  .ticks { position: relative; height: 18px; font-size: 12px; color: var(--muted); margin-right: 6%; }
+  .ticks i { position: absolute; font-style: normal; transform: translateX(-50%); }
+  .ticks i:first-child { transform: none; } .ticks i:last-child { transform: translateX(-100%); }
+
+  /* 예시: 사용자 7 */
+  .score { display: grid; gap: 10px; margin: 12px 0; }
+  .row { display: grid; grid-template-columns: 200px 1fr 120px; gap: 12px; align-items: center; font-size: 14px; }
+  .row .req { font-family: "D2Coding", Consolas, monospace; font-size: 13px; }
+  .bar { height: 16px; background: var(--code); border-radius: 8px; position: relative; overflow: hidden; }
+  .bar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 8px; }
+  .row .lv { text-align: right; }
+  .row .pts { display: block; font-size: 12px; color: var(--muted); }
+  @media (max-width: 600px) { .row { grid-template-columns: 1fr; gap: 4px; } .row .lv { text-align: left; } }
+
+  .note { background: var(--card); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 6px; font-size: 14px; margin: 10px 0; }
+  .warnnote { border-left-color: var(--warn); }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>BOLA 위험도 정리</h1>
+<p class="sub">BOLA 판단 서버 · 2026-11-09 · 점수를 매기는 방법과 위험도(%) 표시</p>
+
+<div class="status">
+  <b>pc1 적용됨 (2026-11-09)</b> · 판단 서버 코드·설정·DB·문서 반영, 테스트 74개 통과<br>
+  남은 것: pc3 대시보드 반영, pc2 Redis 연결 뒤 실제 이벤트로 확인 · 남은 문제는 <code>위험도_개선사항_20261109.md</code>
+</div>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#s1">한 줄 요약</a></li>
+    <li><a href="#s2">왜 바꾸나</a></li>
+    <li><a href="#s3">점수가 매겨지는 과정</a></li>
+    <li><a href="#s4">점수 항목</a></li>
+    <li><a href="#s5">보너스</a></li>
+    <li><a href="#s6">점수를 주지 않는 경우</a></li>
+    <li><a href="#s7">위험도와 단계</a></li>
+    <li><a href="#s7-1">단계 경계를 정한 이유</a></li>
+    <li><a href="#s7-2">실무와 비교</a></li>
+    <li><a href="#s8">동작 흐름과 계산 예시</a></li>
+    <li><a href="#s9">이전과 비교</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ 1 -->
+<h2 id="s1">1. 한 줄 요약</h2>
+<div class="lead">
+  점수 계산과 차단 기준(100점)은 그대로 두고, 화면에 보여 주는 값을 바꿉니다.
+  <div class="formula">위험도(%) = min(점수 ÷ 차단 기준 100점, 1) × 100</div>
+  단계는 <span class="pill p0">정상</span> <span class="pill p1">주의</span> <span class="pill p2">위험</span>
+  <span class="pill p3">고위험</span> <span class="pill p4">차단</span> 다섯 개.
+  100점을 넘은 점수(150 등)는 <b>차단 근거</b>로만 남깁니다.
+</div>
+
+<!-- ============================================================ 2 -->
+<h2 id="s2">2. 왜 바꾸나</h2>
+<div class="tablewrap"><table>
+  <tr><th>이전 문제</th><th>원인</th></tr>
+  <tr><td>대시보드에 150점, 180점이 보여서 "100점이 최대인지" 알 수 없음</td>
+      <td>100점은 최대가 아니라 <b>차단 기준선</b>. 마지막 요청 점수와 보너스가 한 번에 더해져 기준을 넘은 값이 남음</td></tr>
+  <tr><td>150점과 120점 중 누가 더 위험한지 헷갈림</td>
+      <td>둘 다 "확정·차단"으로 같은 뜻. 차이는 마지막 요청과 보너스가 얼마나 붙었는지일 뿐</td></tr>
+  <tr><td>건수 기반 위험도(10건 10%, 50건 80% 등)는 현실에 안 맞음</td>
+      <td>BOLA 3건 정도면 이미 차단되므로 10건, 50건 구간이 쓰일 일이 없음</td></tr>
+</table></div>
+
+<h3>100점을 넘는 이유</h3>
+<p><code>judge/scoring.py</code>는 이벤트를 더한 뒤 합계가 100 이상인지 봅니다. 그래서 넘어선 만큼이 남습니다.</p>
+<pre>/members/3 조회  BOLA_PATH +40                        =  40
+/members/4 조회  BOLA_PATH +40                        =  80
+/members/5 조회  BOLA_PATH +40 → 120 + 피해자 3명 +30  = 150  ★ 확정</pre>
+<ul>
+  <li>확정된 사용자는 그 뒤 이벤트를 채점하지 않으므로, 점수는 확정 순간의 값(150)에서 멈춥니다.</li>
+  <li>이론상 최대는 99점에서 쓰기 BOLA(60)와 보너스 세 개(30+20+10)가 한 번에 붙은 219점입니다.</li>
+</ul>
+
+<!-- ============================================================ 3 -->
+<h2 id="s3">3. 점수가 매겨지는 과정</h2>
+<p>점수는 두 단계를 거쳐 매겨집니다. 탐지 엔진이 요청 하나를 <b>4가지 종류</b>로 판정하고, 판단 서버가 그것을 <b>점수 항목</b>으로 나눠 점수를 더합니다.</p>
+<pre>요청 1건 (Kong 로그)
+   │
+   ▼  ① 탐지 엔진 (fluent-bit/realtime.py) ─ 장부(ledger.json)와 비교
+   │     403/404                     → ATTEMPT
+   │     장부에 없는 객체             → UNKNOWN
+   │     200/204 + 요청자 ≠ 장부 주인 → BOLA
+   │     10초에 의심 요청 10번 초과    → RATE (+ 10분 임시 차단)
+   │     본인 객체, 정상               → 보고 안 함
+   │
+   ▼  ② 판단 서버 (judge/scoring.py) ─ 점수 항목으로 분류
+   │     BOLA    + URL 번호가 곧 주인인 API (/members/{id} 등) → BOLA_PATH   (쓰기면 BOLA_PATH_WRITE)
+   │     BOLA    + 그 밖의 API (장부 근거)                    → BOLA_LEDGER (쓰기면 BOLA_LEDGER_WRITE)
+   │     UNKNOWN + URL 번호가 곧 주인인 API + 성공             → BOLA_PATH 로 올림
+   │     ATTEMPT / UNKNOWN / RATE                             → 그대로
+   │
+   ▼  ③ 사용자별로 항목 점수 + 보너스를 누적 → 위험도 % → 단계
+</pre>
+<ul>
+  <li><b>쓰기</b> = <code>PUT</code>, <code>PATCH</code>, <code>DELETE</code> (남의 객체를 수정·삭제). 조회보다 20점 높습니다.</li>
+  <li><b>URL 번호가 곧 주인인 API</b>(<code>path_owners</code>)는 판단 서버가 학습 장부로 자동 추론합니다. 지금은 <code>/members/{id}</code>, <code>/profiles/{id}</code> 두 개입니다.</li>
+  <li>점수 값은 모두 <code>judge/config.json</code>의 <code>points</code>, <code>bonus</code>에서 바꿀 수 있습니다.</li>
+</ul>
+
+<!-- ============================================================ 4 -->
+<h2 id="s4">4. 점수 항목</h2>
+
+<div class="ladder" aria-label="항목별 점수 비교 (100점 = 차단)">
+  <div class="lrow"><span class="k">BOLA_PATH_WRITE</span><div class="bar"><span style="width:60%;background:var(--lv4)"></span></div><span class="v">60</span></div>
+  <div class="lrow"><span class="k">BOLA_LEDGER_WRITE</span><div class="bar"><span style="width:50%;background:var(--lv3)"></span></div><span class="v">50</span></div>
+  <div class="lrow"><span class="k">BOLA_PATH</span><div class="bar"><span style="width:40%;background:var(--lv3)"></span></div><span class="v">40</span></div>
+  <div class="lrow"><span class="k">BOLA_LEDGER</span><div class="bar"><span style="width:30%;background:var(--lv2)"></span></div><span class="v">30</span></div>
+  <div class="lrow"><span class="k">UNKNOWN</span><div class="bar"><span style="width:20%;background:var(--lv1)"></span></div><span class="v">20</span></div>
+  <div class="lrow"><span class="k">RATE</span><div class="bar"><span style="width:10%;background:var(--lv1)"></span></div><span class="v">10</span></div>
+  <div class="lrow"><span class="k">ATTEMPT</span><div class="bar"><span style="width:5%;background:var(--lv0)"></span></div><span class="v">5</span></div>
+</div>
+<p class="muted">막대 끝 = 100점(차단 기준). 한 번으로 차단되는 항목은 없습니다.</p>
+
+<div class="items">
+  <div class="item c3">
+    <header><span class="name">BOLA_PATH</span><span class="pts">40점</span></header>
+    <div class="what">URL로 확인된 남의 것 조회 — 가장 확실한 BOLA</div>
+    <dl>
+      <dt>조건</dt><dd>URL 번호가 곧 주인인 API에서 남의 번호를 성공(200/204) 조회</dd>
+      <dt>예</dt><dd>사용자 7이 <code>GET /members/3</code> → 200</dd>
+      <dt>이유</dt><dd>URL만 보고 주인을 알 수 있어 장부 오류 가능성이 없음</dd>
+    </dl>
+  </div>
+  <div class="item c4">
+    <header><span class="name">BOLA_PATH_WRITE</span><span class="pts">60점</span></header>
+    <div class="what">URL로 확인된 남의 것 수정·삭제</div>
+    <dl>
+      <dt>조건</dt><dd>위와 같은데 메서드가 <code>PUT</code>/<code>PATCH</code>/<code>DELETE</code></dd>
+      <dt>예</dt><dd>사용자 7이 <code>PATCH /members/3</code> → 200</dd>
+      <dt>이유</dt><dd>보는 것을 넘어 남의 데이터를 바꾸거나 지움. 한 번에 고위험(60%)</dd>
+    </dl>
+  </div>
+  <div class="item c2">
+    <header><span class="name">BOLA_LEDGER</span><span class="pts">30점</span></header>
+    <div class="what">장부로 판정한 남의 것 조회</div>
+    <dl>
+      <dt>조건</dt><dd>그 밖의 API에서 장부상 주인 ≠ 요청자, 성공(200/204)</dd>
+      <dt>예</dt><dd>사용자 7이 <code>GET /orders/55</code>(장부 주인 12) → 200</dd>
+      <dt>이유</dt><dd>BOLA지만 장부가 틀릴 수 있어 <code>BOLA_PATH</code>보다 10점 낮음</dd>
+    </dl>
+  </div>
+  <div class="item c3">
+    <header><span class="name">BOLA_LEDGER_WRITE</span><span class="pts">50점</span></header>
+    <div class="what">장부로 판정한 남의 것 수정·삭제</div>
+    <dl>
+      <dt>조건</dt><dd>위와 같은데 메서드가 <code>PUT</code>/<code>PATCH</code>/<code>DELETE</code></dd>
+      <dt>예</dt><dd>사용자 7이 <code>PATCH /cart/items/40</code>(장부 주인 12) → 200</dd>
+      <dt>이유</dt><dd>쓰기라 조회보다 20점 높지만 장부 근거라 <code>PATH_WRITE</code>보다 10점 낮음</dd>
+    </dl>
+  </div>
+  <div class="item c1">
+    <header><span class="name">UNKNOWN</span><span class="pts">20점</span></header>
+    <div class="what">장부에 없는 객체 조회</div>
+    <dl>
+      <dt>조건</dt><dd>장부에 그 객체 번호가 없음 (403/404 제외)</dd>
+      <dt>예</dt><dd>사용자 7이 <code>GET /orders/99999</code> → 200 (학습 뒤 생긴 주문)</dd>
+      <dt>이유</dt><dd>주인을 몰라 BOLA로 단정 못 함. 단, <code>/members</code>·<code>/profiles</code>에서 성공했으면 URL로 주인을 알므로 <code>BOLA_PATH</code>로 올림</dd>
+    </dl>
+  </div>
+  <div class="item c1">
+    <header><span class="name">RATE</span><span class="pts">10점</span></header>
+    <div class="what">의심 요청이 짧은 시간에 몰림</div>
+    <dl>
+      <dt>조건</dt><dd>10초에 의심 요청(BOLA/ATTEMPT/UNKNOWN)이 10번 넘음. 탐지 엔진이 10분 임시 차단도 함</dd>
+      <dt>예</dt><dd>스크립트로 <code>/orders/1</code>~<code>/orders/30</code>을 빠르게 훑음</dd>
+      <dt>이유</dt><dd>자동화 도구 정황. 각 요청은 이미 점수를 받았으므로 추가 가중만 작게</dd>
+    </dl>
+  </div>
+  <div class="item c0">
+    <header><span class="name">ATTEMPT</span><span class="pts">5점</span></header>
+    <div class="what">시도했지만 막힘</div>
+    <dl>
+      <dt>조건</dt><dd>응답 상태 403(권한 없음) 또는 404(없음)</dd>
+      <dt>예</dt><dd>사용자 7이 <code>GET /payments/8</code> → 403</dd>
+      <dt>이유</dt><dd>남의 번호를 찔러본 흔적이지만 오타·지워진 객체 같은 정상 실패와 구분이 안 됨 → 가장 낮게</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="note">
+  <b>배점 원칙:</b> 확실할수록, 피해가 클수록 높게 줍니다.
+  확실성 — ATTEMPT(막힘) &lt; UNKNOWN(주인 모름) &lt; LEDGER(장부 근거) &lt; PATH(URL로 확인) ·
+  피해 — 조회 &lt; 수정·삭제(+20점).
+</div>
+
+<!-- ============================================================ 5 -->
+<h2 id="s5">5. 보너스</h2>
+<p>항목 점수와 별도로, 사용자의 <b>행동 전체</b>가 공격 패턴과 맞으면 더합니다 (조건을 만족하는 동안 각각 한 번만).</p>
+<div class="tablewrap"><table>
+  <tr><th>보너스</th><th>점수</th><th>조건</th><th>이유</th></tr>
+  <tr><td><code>+victims</code></td><td class="num">30</td><td>BOLA로 피해를 본 서로 다른 사람이 <b>3명 이상</b></td><td>여러 사람의 데이터를 모으는 것은 실수가 아니라 의도적 수집</td></tr>
+  <tr><td><code>+attempt_then_bola</code></td><td class="num">20</td><td>ATTEMPT(막힘) <b>뒤에</b> BOLA 성공</td><td>막힌 뒤 우회 경로를 찾아 성공한 흔적</td></tr>
+  <tr><td><code>+multi_api</code></td><td class="num">10</td><td><b>2가지 이상</b> 자원 종류(members, orders, payments…)에서 BOLA</td><td>여러 기능을 탐색 중. <code>/members/{id}</code>와 <code>/members/{id}/addresses</code>는 같은 종류로 셈</td></tr>
+</table></div>
+
+<!-- ============================================================ 6 -->
+<h2 id="s6">6. 점수를 주지 않는 경우</h2>
+<div class="tablewrap"><table>
+  <tr><th>경우</th><th>처리</th><th>이유</th></tr>
+  <tr><td>URL 번호가 요청자 본인 (예: 사용자 4가 <code>/members/4</code>)</td><td>판단 서버가 무시 (<code>decision = ignored</code>)</td><td>장부가 틀려서 잘못 보고된 것 (장부 오탐)</td></tr>
+  <tr><td>장부상 주인이 <code>null</code> (공유 객체)</td><td>탐지 엔진이 보고 안 함</td><td>여러 사람이 같이 쓰는 객체라 남의 것이 아님</td></tr>
+  <tr><td>비로그인, 관리자, Kong이 이미 막은 요청</td><td>탐지 엔진이 보고 안 함</td><td>판정 대상이 아님</td></tr>
+  <tr><td>이미 차단된 사용자의 새 요청</td><td>점수 없이 요청 ID만 <code>confirmed.json</code>에 추가</td><td>이미 100%. 장부 학습에서 빼기 위해 기록만</td></tr>
+  <tr><td>관리자가 해제(<code>unblock.py</code>)하기 전의 요청</td><td>채점 안 함</td><td>해제한 사용자가 예전 기록으로 다시 차단되지 않게</td></tr>
+</table></div>
+
+<!-- ============================================================ 7 -->
+<h2 id="s7">7. 위험도와 단계</h2>
+
+<div class="bands" role="img" aria-label="위험도 단계: 0~9 정상, 10~29 주의, 30~59 위험, 60~99 고위험, 100 차단">
+  <div class="b0">정상</div><div class="b1">주의</div><div class="b2">위험</div><div class="b3">고위험</div><div class="b4">차단</div>
+</div>
+<div class="ticks"><i style="left:0">0</i><i style="left:10%">10</i><i style="left:30%">30</i><i style="left:60%">60</i><i style="left:100%">100%</i></div>
+
+<div class="tablewrap"><table>
+  <tr><th>위험도</th><th>단계</th><th>DB 값 (<code>decision</code> / <code>user_status</code>)</th><th>어떤 행동이면 여기 오나</th></tr>
+  <tr><td class="num">0~9%</td><td><span class="pill p0">정상</span></td><td><code>normal</code> / <code>normal</code></td><td>ATTEMPT(403/404) 1번 (5점)</td></tr>
+  <tr><td class="num">10~29%</td><td><span class="pill p1">주의</span></td><td><code>caution</code> / <code>caution</code></td><td>ATTEMPT 2~5번, 장부에 없는 객체 조회 1번 (UNKNOWN 20점)</td></tr>
+  <tr><td class="num">30~59%</td><td><span class="pill p2">위험</span></td><td><code>danger</code> / <code>danger</code></td><td>남의 것을 1번 조회 (장부 근거 30점, 확실한 BOLA 40점)</td></tr>
+  <tr><td class="num">60~99%</td><td><span class="pill p3">고위험</span></td><td><code>high</code> / <code>high</code></td><td>남의 것을 2번 조회 (60~80점), 또는 URL로 확인된 남의 것을 1번 수정·삭제 (60점)</td></tr>
+  <tr><td class="num">100%</td><td><span class="pill p4">차단</span></td><td><code>attack</code> / <code>confirmed</code></td><td>확실한 BOLA 3번, 쓰기 2번 등 → 영구 차단</td></tr>
+</table></div>
+<ul>
+  <li>읽기와 쓰기 구분은 따로 하지 않습니다. 배점에 이미 들어 있습니다 (조회 30·40점, 수정·삭제 50·60점).
+      URL로 주인이 확인되는 쓰기(60점)는 한 번에 고위험, 장부 근거 쓰기(50점)는 한 번이면 위험입니다.</li>
+  <li>위험도 100% = 차단이므로 두 값이 서로 어긋나지 않습니다.</li>
+  <li>위험도는 내림으로 계산합니다. 99.9점이 100%로 보이지 않게 해서 "차단 = 100%"만 되도록 했습니다.</li>
+</ul>
+
+<h3 id="s7-1">7-1. 단계 경계를 정한 이유</h3>
+<p>경계는 <b>그 점수에 닿으려면 실제로 무엇을 해야 하는지</b>를 보고 정했습니다.</p>
+<div class="tablewrap"><table>
+  <tr><th>단계</th><th>경계</th><th>닿는 행동</th><th>이유</th></tr>
+  <tr><td><span class="pill p1">주의</span></td><td class="num">10</td><td>403/404 2번</td><td>남의 번호를 찔러보는 탐색. 1번(5점)은 오타일 수 있어 정상</td></tr>
+  <tr><td><span class="pill p2">위험</span></td><td class="num">30</td><td>남의 것을 1번 봄 (BOLA 1건)</td><td>BOLA 1건이 처음 닿는 점수</td></tr>
+  <tr><td><span class="pill p3">고위험</span></td><td class="num">60</td><td>남의 것을 2번 봄, 또는 쓰기 1번</td><td>자동 차단 전에 사람이 확인할 지점 → 관리자 알림</td></tr>
+  <tr><td><span class="pill p4">차단</span></td><td class="num">100</td><td>남의 것을 3번 봄, 또는 쓰기 2번</td><td>1~2번은 실수일 수 있지만 3번은 우연이 아님 → 영구 차단</td></tr>
+</table></div>
+<ul>
+  <li>30·60·100은 원래 쓰던 경계라서 <b>차단과 알림 시점은 그대로</b>입니다. 회의 안대로 주의(10)만 새로 생겼습니다.</li>
+  <li>차단 기준이 100이라 <b>점수 = 위험도(%)</b> 입니다.</li>
+</ul>
+<div class="note warnnote"><b>한계:</b> 팀에서 정한 값이고 실제 데이터로 검증하지는 않았습니다 (개선 사항 4번).</div>
+
+<h3 id="s7-2">7-2. 실무와 비교</h3>
+<div class="note">위험도는 <b>실무와 같이 0~100 척도로 표시하며, 근거는 탐지 항목별 점수의 누적</b>입니다.</div>
+<p>실무에서도 위험도를 0~100 척도로 나타내고 구간마다 등급과 조치를 연결하는 경우가 많습니다.
+   표시 방식은 비슷하지만, 숫자를 만드는 근거는 제품마다 다릅니다.</p>
+<div class="tablewrap"><table>
+  <tr><th>근거</th><th>쓰는 곳 (예)</th><th>우리</th></tr>
+  <tr><td>규칙 점수 합계</td><td>보안 관제(SIEM)의 위험 기반 경보, 웹 방화벽 이상 점수</td><td><b>이 방식</b></td></tr>
+  <tr><td>머신러닝 확률</td><td>결제 사기 탐지, 봇 탐지</td><td class="muted">—</td></tr>
+  <tr><td>평소 행동 대비 이상 정도</td><td>사용자 행동 분석(UEBA)</td><td class="muted">—</td></tr>
+</table></div>
+<ul>
+  <li>"45%"는 "공격일 확률 45%"가 아니라 "100점 척도에서 45점"이라는 뜻입니다.</li>
+  <li>실무의 일반적인 등급 구간(예: CVSS를 100점으로 바꾼 40 / 70 / 90)보다 우리 경계(10 / 30 / 60)가 낮은 이유는,
+      BOLA는 한 건만으로도 실제 데이터 유출이라 단계를 일찍 올리도록 했기 때문입니다.</li>
+  <li class="muted">위 실무 사례는 일반적인 지식을 정리한 것이라, 보고서에 인용할 때는 각 제품의 공식 문서로 확인이 필요합니다.</li>
+</ul>
+
+<!-- ============================================================ 8 -->
+<h2 id="s8">8. 동작 흐름과 계산 예시</h2>
+<pre>pc2 Kong ─▶ Fluent Bit ─▶ bola-realtime (탐지)
+                              │ Redis bola:events
+                              ▼
+                         bola-judge
+                           scoring.py
+                             ├ 점수 계산                         → total = 150
+                             ├ 위험도 = min(total, 100)          → risk_pct = 100
+                             └ 단계 = levels 경계와 비교          → 차단 (attack)
+                           blocker.py   100점이면 영구 차단
+                           notifier.py  고위험·차단으로 오를 때 관리자 Slack
+                           db.py        bola_events, user_status 에 risk_score + risk_pct 기록
+                              │
+                              ▼
+                         judge-postgres ─▶ pc3 대시보드
+                                            목록: 위험도 % + 단계
+                                            상세: 차단 근거 (risk_score 150, 점수 내역)</pre>
+
+<h3>예시: 사용자 7</h3>
+<div class="score">
+  <div class="row"><div><span class="req">GET /orders/9 → 403</span><span class="pts">ATTEMPT +5 = 5점</span></div>
+    <div class="bar"><span style="width:5%;background:var(--lv0)"></span></div>
+    <div class="lv">5% <span class="pill p0">정상</span></div></div>
+  <div class="row"><div><span class="req">GET /orders/10 → 403</span><span class="pts">ATTEMPT +5 = 10점</span></div>
+    <div class="bar"><span style="width:10%;background:var(--lv1)"></span></div>
+    <div class="lv">10% <span class="pill p1">주의</span></div></div>
+  <div class="row"><div><span class="req">GET /members/3 → 200</span><span class="pts">BOLA_PATH +40, 시도 뒤 성공 +20 = 70점</span></div>
+    <div class="bar"><span style="width:70%;background:var(--lv3)"></span></div>
+    <div class="lv">70% <span class="pill p3">고위험</span></div></div>
+  <div class="row"><div><span class="req">GET /members/4 → 200</span><span class="pts">BOLA_PATH +40 = 110점</span></div>
+    <div class="bar"><span style="width:100%;background:var(--lv4)"></span></div>
+    <div class="lv">100% <span class="pill p4">차단</span></div></div>
+</div>
+<div class="tablewrap"><table>
+  <tr><th>순서</th><th>항목</th><th>보너스</th><th>점수 (<code>risk_score</code>)</th><th>위험도 (<code>risk_pct</code>)</th><th>일어나는 일</th></tr>
+  <tr><td>1</td><td>ATTEMPT +5</td><td>—</td><td class="num">5</td><td class="num">5%</td><td>DB 기록만</td></tr>
+  <tr><td>2</td><td>ATTEMPT +5</td><td>—</td><td class="num">10</td><td class="num">10%</td><td>단계 오름 (DB 기록)</td></tr>
+  <tr><td>3</td><td>BOLA_PATH +40</td><td>+attempt_then_bola 20</td><td class="num">70</td><td class="num">70%</td><td>관리자 Slack 알림</td></tr>
+  <tr><td>4</td><td>BOLA_PATH +40</td><td>—</td><td class="num">110</td><td class="num">100%</td><td>영구 차단, <code>confirmed.json</code>, 관리자 Slack 알림</td></tr>
+</table></div>
+<p>대시보드에는 사용자 7이 "위험도 100% · 차단"으로 보이고, 상세 화면에서
+   "차단 근거 110점 (BOLA_PATH 80, ATTEMPT 10, +attempt_then_bola 20)"을 봅니다.
+   피해자는 2명(3, 4)이라 <code>+victims</code>는 붙지 않았습니다.</p>
+
+<h3>대표 행동별 점수</h3>
+<div class="tablewrap"><table>
+  <tr><th>행동</th><th>계산</th><th>점수</th><th>단계</th></tr>
+  <tr><td>남의 회원 정보 3명 조회</td><td>40 × 3 + 피해자 3명 30</td><td class="num">150</td><td><span class="pill p4">차단</span></td></tr>
+  <tr><td>남의 회원 정보 2번 수정</td><td>60 × 2</td><td class="num">120</td><td><span class="pill p4">차단</span></td></tr>
+  <tr><td>남의 회원 정보 1건 + 주문 1건 조회</td><td>40 + 30 + 자원 2종 10</td><td class="num">80</td><td><span class="pill p3">고위험</span></td></tr>
+  <tr><td>남의 주문 2건 조회 (장부 근거)</td><td>30 × 2</td><td class="num">60</td><td><span class="pill p3">고위험</span></td></tr>
+  <tr><td>403만 4번</td><td>5 × 4</td><td class="num">20</td><td><span class="pill p1">주의</span></td></tr>
+</table></div>
+
+<!-- ============================================================ 9 -->
+<h2 id="s9">9. 이전과 비교</h2>
+<div class="tablewrap"><table>
+  <tr><th>항목</th><th>이전</th><th>바뀐 뒤</th></tr>
+  <tr><td>화면에 보이는 값</td><td>점수 그대로 (150)</td><td>위험도 0~100%</td></tr>
+  <tr><td>100점을 넘은 점수</td><td>화면에 그대로</td><td>상세 화면의 차단 근거로만</td></tr>
+  <tr><td>단계</td><td>normal / watch(30) / warning(60) / attack(100)</td><td>정상 / 주의(10) / 위험(30) / 고위험(60) / 차단(100)</td></tr>
+  <tr><td>점수 배점</td><td colspan="2">바뀌지 않음 (4·5장)</td></tr>
+  <tr><td>영구 차단 시점</td><td>100점</td><td>100점 (같음)</td></tr>
+  <tr><td>관리자 Slack 알림</td><td>warning(60), attack(100)</td><td>고위험(60), 차단(100) (같은 점수)</td></tr>
+  <tr><td>매시 요약 알림</td><td>warning 이상</td><td>고위험 이상 (같은 점수)</td></tr>
+  <tr><td>DB 기록량</td><td>—</td><td>주의 단계가 생겨 단계 오름 기록이 조금 늘어남</td></tr>
+  <tr><td>대시보드 사용자 목록</td><td>—</td><td>403을 몇 번 맞은 정상 사용자도 "주의"로 보임 (의도한 동작)</td></tr>
+</table></div>
+
+</main>
+</body>
+</html>

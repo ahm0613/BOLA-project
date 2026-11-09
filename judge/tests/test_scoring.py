@@ -123,7 +123,7 @@ class JudgeTest(unittest.TestCase):
         j.process(ev("2", "BOLA", "/members/3", owner="3", sec=0))
         j.process(ev("2", "BOLA", "/members/4", owner="4", sec=86400 * 30))        # 30일 뒤
         self.assertEqual(j.top()[0][0], 80)
-        self.assertEqual(j.last["level_up"]["reason"], "누적 점수 80점 ≥ warning 기준 60점")
+        self.assertEqual(j.last["level_up"]["reason"], "누적 점수 80점 ≥ 고위험 기준 60점")
         out = j.process(ev("2", "ATTEMPT", "/members/5", status=403, sec=86400 * 365))   # 1년 뒤에도 그대로 +5
         self.assertEqual(j.last["total"], 85)
         self.assertEqual(out, [])
@@ -158,13 +158,13 @@ class JudgeTest(unittest.TestCase):
                          {"victims": ["3", "4"], "attackers": ["2", "5"]})
 
     def test_levels(self):
-        """단계가 올라갈 때만 level_up: 40(watch) → 75(warning) → 80(그대로) → 105(attack)"""
+        """단계가 올라갈 때만 level_up: 40(위험 danger) → 75(고위험 high) → 80(그대로) → 125(차단 attack)"""
         self.j.process(ev("2", "BOLA", "/members/3", owner="3", sec=0))
-        self.assertEqual((self.j.last["total"], self.j.last["level_up"]["decision"]), (40, "watch"))
+        self.assertEqual((self.j.last["total"], self.j.last["level_up"]["decision"]), (40, "danger"))
         self.j.process(ev("2", "BOLA", "/orders/5", owner="9", sec=1, api="GET /orders/{id}"))   # +25, 자원 2종 +10
-        self.assertEqual((self.j.last["total"], self.j.last["level_up"]["decision"]), (75, "warning"))
+        self.assertEqual((self.j.last["total"], self.j.last["level_up"]["decision"]), (75, "high"))
         self.j.process(ev("2", "ATTEMPT", "/payments/1", status=403, sec=2))
-        self.assertEqual((self.j.last["total"], self.j.last["level"]), (80, "warning"))
+        self.assertEqual((self.j.last["total"], self.j.last["level"]), (80, "high"))
         self.assertNotIn("level_up", self.j.last)                       # 같은 단계 → 사건 없음
         self.j.process(ev("2", "BOLA", "/orders/6", owner="9", sec=3, api="GET /orders/{id}"))   # +25, 시도→성공 +20
         self.assertEqual((self.j.last["total"], self.j.last["level_up"]["decision"], self.j.last["result"]),
@@ -175,6 +175,29 @@ class JudgeTest(unittest.TestCase):
         j = Judge({**CFG, "points": {**CFG["points"], "BOLA_PATH": 120}})
         j.process(ev("2", "BOLA", "/members/3", owner="3"))
         self.assertEqual((j.last["level_up"]["decision"], j.last["result"]), ("attack", "confirmed"))
+
+    def test_caution_level(self):
+        """10점부터 주의(caution): ATTEMPT 1번(5점)은 정상, 2번(10점)이면 주의"""
+        self.j.process(ev("2", "ATTEMPT", "/orders/1", status=403, sec=0))
+        self.assertEqual((self.j.last["total"], self.j.last["level"], self.j.last["risk_pct"]), (5, "normal", 5))
+        self.j.process(ev("2", "ATTEMPT", "/orders/2", status=403, sec=1))
+        self.assertEqual((self.j.last["total"], self.j.last["level_up"]["decision"]), (10, "caution"))
+        self.assertEqual(self.j.last["level_up"]["reason"], "누적 점수 10점 ≥ 주의 기준 10점")
+
+    def test_risk_pct(self):
+        """위험도(%) = min(점수 ÷ 차단 기준, 1) × 100. 내림, 100에서 멈춤, 점수가 없으면 None"""
+        cases = {None: None, 0: 0, 9: 9, 10: 10, 59: 59, 60: 60, 99: 99, 100: 100, 150: 100, 219: 100, -5: 0}
+        self.assertEqual({s: self.j.risk_pct(s) for s in cases}, cases)
+        j = Judge({**CFG, "threshold": 150})                # 기준이 100이 아니어도 기준 = 100%
+        self.assertEqual((j.risk_pct(149), j.risk_pct(150), j.risk_pct(75)), (99, 100, 50))
+
+    def test_risk_pct_in_last(self):
+        """채점 결과에 위험도가 같이 들어감. 확정 순간 150점이어도 위험도는 100%"""
+        for i, v in enumerate(["3", "4"]):
+            self.j.process(ev("2", "BOLA", f"/members/{v}", owner=v, sec=i))
+        self.assertEqual((self.j.last["total"], self.j.last["risk_pct"], self.j.last["level"]), (80, 80, "high"))
+        self.j.process(ev("2", "BOLA", "/members/5", owner="5", sec=2))       # 120 + 피해자 3명 30
+        self.assertEqual((self.j.last["total"], self.j.last["risk_pct"], self.j.last["result"]), (150, 100, "confirmed"))
 
     def test_after_confirmed(self):
         """확정된 사용자의 새 의심 요청은 바로 requests에 추가"""

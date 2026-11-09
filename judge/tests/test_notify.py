@@ -1,7 +1,7 @@
 """Slack 알림 테스트: python -m unittest discover tests
 
 역할: 실제 Slack·PostgreSQL 없이 가짜 웹훅·가짜 기록 DB로 확인한다.
-  - 관리자: warning / attack(건너뛰면 attack 하나) / RATE(하루 한 번), 재시작해도 같은 알림은 한 번
+  - 관리자: high(고위험) / attack(차단, 건너뛰면 attack 하나) / RATE(하루 한 번), 재시작해도 같은 알림은 한 번
   - 개발자: 처음 털린 API만, 7일 조용하다가 다시 털리면 재발 알림, 사용자 번호 없음
   - 복원 중(live=False)에는 보내지 않음, 웹훅이 없으면 skipped, 실패하면 5번까지 다시 시도
   - 1시간 요약: 정각 + 30초, 켜진 뒤 끝난 시간대만, 일이 없어도 보냄
@@ -110,13 +110,13 @@ class NotifierTest(unittest.TestCase):
         n.run_pending()
         return decisions
 
-    def test_warning_then_attack(self):
-        """40 → 80(warning) → 120(attack): 관리자 알림 2건, 개발자 알림은 API 처음 한 번"""
+    def test_high_then_attack(self):
+        """40 → 80(고위험) → 120(차단): 관리자 알림 2건, 개발자 알림은 API 처음 한 번"""
         for i, v in enumerate(["3", "4", "5"]):
             self.feed(ev(7, "BOLA", f"/members/{v}", sec=i))
         admin = self.post.to("admin")
         self.assertEqual(len(admin), 2)
-        self.assertIn("사용자 7 warning 단계", admin[0])
+        self.assertIn("사용자 7 고위험 단계, 위험도 80%", admin[0])
         self.assertIn("[공격 확정] 사용자 7 영구 차단함", admin[1])
         self.assertIn("unblock.py 7", admin[1])
         dev = self.post.to("dev")
@@ -125,7 +125,7 @@ class NotifierTest(unittest.TestCase):
         self.assertNotIn("사용자 7", dev[0])                 # 개발자에게는 사용자 번호를 보내지 않음
 
     def test_jump_to_attack_only(self):
-        """한 이벤트로 warning을 건너뛰고 확정되면 attack 하나만"""
+        """한 이벤트로 고위험을 건너뛰고 확정되면 attack 하나만"""
         cfg = dict(CFG, points=dict(CFG["points"], BOLA_PATH=150))
         self.j = Judge(cfg)
         self.feed(ev(7, "BOLA", "/members/3"))
@@ -157,7 +157,7 @@ class NotifierTest(unittest.TestCase):
         self.j.released["7"] = T0 + 5000
         self.feed(ev(7, "BOLA", "/members/3", sec=10))
         self.feed(ev(7, "BOLA", "/members/4", sec=11))
-        self.assertEqual(len([t for t in self.post.to("admin") if "warning" in t]), 2)
+        self.assertEqual(len([t for t in self.post.to("admin") if "고위험 단계" in t]), 2)
 
     def test_rate_once_per_day(self):
         """RATE는 사용자마다 하루 한 번"""
@@ -240,15 +240,17 @@ class NotifierTest(unittest.TestCase):
         self.assertIn("주의 사용자 없음 (이상 없음)", self.post.to("admin")[0])
 
     def test_summary_text(self):
-        """요약 글: 확정·warning·RATE 사용자만 한 줄씩, DB 실패 안내"""
+        """요약 글: 확정·고위험·RATE 사용자만 한 줄씩, DB 실패 안내"""
         dev = self.n.dev_summary_text("10:00~11:00", [("GET /orders/{id}", 12, 5, 2)])
         self.assertIn("GET /orders/{id}: 성공 12건, 피해자 5명, 공격자 2명", dev)
         admin = self.n.admin_summary_text("10:00~11:00", [
-            ("7", 30, 150, 2, True, 3), ("9", 5, 70, 0, False, 2), ("11", 1, 5, 0, False, 0)])
+            ("7", 30, 150, 2, True, ["high", "attack"]), ("9", 5, 70, 0, False, ["danger", "high"]),
+            ("11", 1, 5, 0, False, ["normal"]), ("13", 2, 40, 0, False, ["danger"])])
         self.assertIn("확정 1명, 임시 차단 2건", admin)
-        self.assertIn("사용자 7: 확정 (최고 150점), 임시 차단 2번", admin)
-        self.assertIn("사용자 9: warning (최고 70점)", admin)
+        self.assertIn("사용자 7: 차단 (위험도 100%, 최고 150점), 임시 차단 2번", admin)
+        self.assertIn("사용자 9: 고위험 (위험도 70%, 최고 70점)", admin)
         self.assertNotIn("사용자 11", admin)
+        self.assertNotIn("사용자 13", admin)                  # 위험(danger)은 알림 단계(고위험) 아래
         self.assertIn("DB 접속 실패", self.n.admin_summary_text("x", None))
 
 

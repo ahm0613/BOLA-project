@@ -7,6 +7,7 @@
 import os
 import sys
 import tempfile
+import re
 import unittest
 from contextlib import contextmanager
 
@@ -82,21 +83,21 @@ class DbWriterTest(unittest.TestCase):
     def test_batch_and_user_merge(self):
         """이벤트는 한 번에, 빠진 컬럼은 NULL, 사용자 상태는 사용자마다 마지막 값만"""
         self.w.put_event({"stream_id": "1-0", "user_id": "2", "detection_reasons": {"detail": "요청자 2 -> 3"}})
-        self.w.put_user(user("2", "watch", 40))
-        self.w.put_user(user("2", "warning", 75))
+        self.w.put_user(user("2", "danger", 40))
+        self.w.put_user(user("2", "high", 75))
         self.assertTrue(self.w.flush())
         self.assertEqual([t for t, _ in self.fake.log], ["bola_events", "user_status"])
         row = self.fake.log[0][1][0]
         self.assertEqual(set(row), set(db.EVENT_COLUMNS))
         self.assertIsNone(row["action_id"])
         self.assertEqual(row["detection_reasons"], '{"detail": "요청자 2 -> 3"}')   # JSON 문자열로 바뀜
-        self.assertEqual([(r["user_status"], r["risk_score"]) for r in self.fake.log[1][1]], [("warning", 75)])
+        self.assertEqual([(r["user_status"], r["risk_score"]) for r in self.fake.log[1][1]], [("high", 75)])
 
     def test_retry_after_failure(self):
         """DB가 꺼져 있으면 되돌려 놓고, 다시 켜지면 그대로 씀"""
         self.fake.fail = True
         self.w.put_event({"stream_id": "1-0", "detection_reasons": {}})
-        self.w.put_user(user("2", "watch", 40))
+        self.w.put_user(user("2", "danger", 40))
         self.assertFalse(self.w.flush())
         self.assertEqual((len(self.w.events), len(self.w.users), self.w.counts["errors"]), (1, 1, 1))
         self.fake.fail = False
@@ -106,7 +107,7 @@ class DbWriterTest(unittest.TestCase):
     def test_newer_user_wins_after_failure(self):
         """실패해서 되돌려 놓는 동안 들어온 새 사용자 상태가 옛 값에 덮이지 않음"""
         self.fake.fail = True
-        self.w.put_user(user("2", "watch", 40))
+        self.w.put_user(user("2", "danger", 40))
         self.assertFalse(self.w.flush())
         self.w.put_user(user("2", "confirmed", 120))
         self.fake.fail = False
@@ -166,11 +167,11 @@ class RecordDbTest(unittest.TestCase):
         self.assertEqual((r1["stream_id"], r1["event_id"], r1["action_type"], r1["api_path"]),
                          (f"{self.t0 + 50}-0", "rid-0", "BOLA", "GET /members/{id}"))
         self.assertEqual(r1["detected_at"].timestamp() * 1000 - r1["event_at"].timestamp() * 1000, 50)
-        self.assertEqual((r1["risk_score"], r1["decision"], r1["user_status"]), (40, "watch", "watch"))
+        self.assertEqual((r1["risk_score"], r1["decision"], r1["user_status"]), (40, "danger", "danger"))
         self.assertEqual(r1["detection_reasons"]["detail"], "요청자 7 -> x (주인 3)")
         self.assertNotIn("action_id", r1)
         r2 = self.send("ATTEMPT", "/payments/1", status=403, s=1, api="GET /payments/{id}")
-        self.assertEqual((r2["risk_score"], r2["decision"]), (45, "watch"))
+        self.assertEqual((r2["risk_score"], r2["decision"]), (45, "danger"))
         self.assertEqual(r2["user_status_updated_at"], r1["user_status_updated_at"])   # 상태 그대로 → 시각 그대로
 
     def test_rate_and_confirm_actions(self):
@@ -187,6 +188,19 @@ class RecordDbTest(unittest.TestCase):
         self.assertEqual((r["decision"], r["risk_score"], r["user_status"]), ("attack", 100, "confirmed"))
         self.assertEqual(self.rec.users[-1]["user_status"], "confirmed")
 
+    def test_risk_pct_column(self):
+        """bola_events·user_status에 위험도(%)가 들어감. 확정 뒤에는 점수가 100을 넘어도 위험도 100"""
+        r = self.send("ATTEMPT", "/payments/1", status=403, api="GET /payments/{id}")
+        self.assertEqual((r["risk_score"], r["risk_pct"], r["decision"]), (5, 5, "normal"))
+        r = self.send("BOLA", "/members/3", owner="3", s=1)                  # 5 + 40 + 시도→성공 20 = 65
+        self.assertEqual((r["risk_score"], r["risk_pct"], r["decision"], r["user_status"]), (65, 65, "high", "high"))
+        self.assertEqual(self.rec.users[-1]["risk_pct"], 65)
+        r = self.send("BOLA", "/members/4", owner="4", s=2)                  # 65 + 40 = 105 → 확정
+        self.assertEqual((r["risk_score"], r["risk_pct"], r["user_status"]), (105, 100, "confirmed"))
+        r = self.send("ATTEMPT", "/members/8", status=403, s=3)              # 확정 뒤 이벤트
+        self.assertEqual((r["risk_pct"], r["user_status"]), (100, "confirmed"))
+        self.assertEqual(self.rec.users[-1]["risk_pct"], 100)
+
     def test_status_output(self):
         """상태 출력이 사용자 상태 기억(user_state)과 이름이 겹치지 않고 동작"""
         self.send("BOLA", "/members/3", owner="3")
@@ -197,6 +211,14 @@ class RecordDbTest(unittest.TestCase):
         """URL 번호가 본인이면 decision=ignored, 점수 없음"""
         r = self.send("BOLA", "/members/7", owner="43")
         self.assertEqual((r["decision"], r["risk_score"], r["user_status"]), ("ignored", None, "normal"))
+
+
+class SqlTextTest(unittest.TestCase):
+    """psycopg는 SQL 안의 %를 자리표시로 읽음 → %(이름)s 말고 다른 %가 있으면 실행할 때 ProgrammingError"""
+    def test_no_stray_percent(self):
+        for name in ("SQL_EVENT", "SQL_USER", "SQL_SWEEP"):
+            rest = re.sub(r"%\(\w+\)s", "", getattr(db, name))
+            self.assertNotIn("%", rest, name)
 
 
 class FakeRedis:
@@ -256,7 +278,7 @@ class RestoreTest(unittest.TestCase):
         a.handle(sid, f)
         sid2, f2, state = db.row_to_event(self.as_db_rows(a.db.events)[0])
         self.assertEqual((sid2, f2), (sid, f))
-        self.assertEqual(state[0], "watch")
+        self.assertEqual(state[0], "danger")
 
     def test_restore_from_db_then_redis(self):
         """DB 두 건(30일 간격) + DB에 아직 없는 Redis 한 건 → 누적 100점 확정, DB 복원분은 다시 쓰지 않음"""

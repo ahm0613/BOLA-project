@@ -1,6 +1,6 @@
 # BOLA Python 탐지·판단 엔진 (python-engin)
 
-Kong API 로그를 실시간으로 받아 **BOLA(객체 수준 인가 우회)** 를 판정하고, 사용자별 점수로 공격자를 확정해 **PostgreSQL**에 쌓습니다.
+Kong API 로그를 실시간으로 받아 **BOLA(객체 수준 인가 우회)** 를 판정하고, 사용자별 누적 점수로 공격자를 확정해 **영구 차단**하고 **PostgreSQL**에 쌓으며 Slack으로 알립니다.
 pc1에서 **Docker로만** 실행하며, pc3 Streamlit 대시보드가 DB를 읽습니다.
 
 ```
@@ -9,10 +9,11 @@ pc2 (Kong·Redis)                    pc1 (WSL Docker, 이 저장소)            
 │ Kong            │                 │ bola-realtime  로그 수신(5170, mTLS) + 장부 판정 │
 │ Fluent Bit ─────┼── 5170 ────────▶│        │ XADD bola:events                       │
 │ Redis ◀─────────┼─────────────────┼────────┘                                       │
-│   └─────────────┼── XREADGROUP ──▶│ bola-judge     점수 → 공격자 확정               │
-└────────────────┘                 │        │ confirmed.json (장부 학습에서 제외)      │
-                                   │        ▼                                       │
-                                   │ judge-postgres bola_events, user_status ───────┼── 5432 ──▶ Streamlit
+│   └─────────────┼── XREADGROUP ──▶│ bola-judge     누적 점수 → 공격자 확정 ─────────┼──▶ Slack 웹훅
+│ blocked:user:N ◀┼── 영구 차단 ─────┤        │ confirmed.json (장부 학습에서 제외)      │
+└────────────────┘                 │        ▼                                       │
+                                   │ judge-postgres bola_events, user_status, ──────┼── 5432 ──▶ Streamlit
+                                   │                alerts                          │
                                    └───────────────────────────────────────────────┘
 ```
 
@@ -21,9 +22,12 @@ pc2 (Kong·Redis)                    pc1 (WSL Docker, 이 저장소)            
 | 폴더 | 컨테이너 | 역할 |
 |---|---|---|
 | [`fluent-bit/`](fluent-bit/README.md) | `bola-realtime` | Fluent Bit이 보내는 Kong 로그를 받아 장부(`ledger.json`)로 BOLA/ATTEMPT/UNKNOWN 판정 → Redis `bola:events`. 장부 학습(`ledger_v2.py`) |
-| [`judge/`](judge/README.md) | `bola-judge`, `judge-postgres` | Redis 이벤트로 사용자별 점수(조회·쓰기 구분) → 공격자 확정 → `confirmed.json` + PostgreSQL 기록. 1대1 API 자동 추론(`api_infer.py`) |
+| [`judge/`](judge/README.md) | `bola-judge`, `judge-postgres` | Redis 이벤트로 사용자별 점수(조회·쓰기 구분, 영구 누적) → 공격자 확정 → 영구 차단 + `confirmed.json` + PostgreSQL 기록. 1대1 API 자동 추론(`api_infer.py`), Slack 알림(`notifier.py`) |
 | [`attack/`](attack/README.md) | — | BOLA 공격 시뮬레이터(`simulate.py`). 탐지·차단을 검증 (burst/steady/slow/rotate, 무작위 순서) |
 | `docker-compose.yml` | — | 위 두 폴더의 compose를 포함(include)해서 세 컨테이너를 한꺼번에 실행 (프로젝트 이름 `bola`) |
+| `archive/` | — | 쓰지 않는 것 보관 (git 제외). pc3에 넘기는 DB 조회 모듈 사본 `archive/dashboard/bola_db.py`도 여기 있음 |
+
+전체 동작, 로그 보는 곳, 현재 상태는 [`OVERVIEW.md`](OVERVIEW.md)에 있습니다.
 
 ## 처음 준비 (pc1)
 
@@ -32,6 +36,7 @@ git에 없는 파일 세 가지를 먼저 준비합니다.
 1. **비밀번호:** 두 폴더에서 `.env.example`을 `.env`로 복사해 채움
    - `fluent-bit/.env`: `REDIS_PASSWORD`
    - `judge/.env`: `REDIS_PASSWORD`, `PG_SUPERUSER_PASSWORD`, `PG_JUDGE_PASSWORD`, `PG_DASHBOARD_PASSWORD` 등
+   - Slack 알림을 쓰려면 `judge/.env`의 `SLACK_ADMIN_WEBHOOK`(관리자), `SLACK_DEV_WEBHOOK`(개발자)에 웹훅 주소. 비워 두면 알림만 보내지 않고 나머지는 그대로 동작
 2. **개인키:** `fluent-bit/certs/server.key`를 따로 받아서 넣음 (mTLS 서버 키)
 3. **포트 전달:** Docker가 WSL(NAT) 안에 있으므로 LAN → pc1 → WSL 포트 전달이 필요 (관리자 PowerShell)
    ```powershell
@@ -63,13 +68,15 @@ docker compose logs -f judge     # 판단: [점수] … BOLA_PATH +40 = 80/100�
 
 | 테이블 | 한 행 |
 |---|---|
-| `bola_events` | Redis 이벤트 1건: Redis 값(`event_id`, `event_at`, `detected_at`, `user_id`, `action_type`, `api_path`, `detection_reasons`) + 판단(`risk_score`, `decision`, `user_status` …) + 조치(`action_id`, `enforcement_status`, `expires_at` …) |
-| `user_status` | 사용자 1명의 현재 상태 |
+| `bola_events` | Redis 이벤트 1건: Redis 값(`event_id`, `event_at`, `detected_at`, `user_id`, `action_type`, `api_path`, `detection_reasons`) + 판단(`risk_score` 차단 근거 점수, `risk_pct` 위험도 0~100, `decision`, `user_status` …) + 조치(`action_id`, `enforcement_status`, `expires_at` …) |
+| `user_status` | 사용자 1명의 현재 상태 (정상 / 주의 / 위험 / 고위험 / 차단, 위험도 %) |
+| `alerts` | Slack 알림 1건 (보냄 / 실패 / 웹훅 없어 건너뜀) |
 
 접속: `host=<pc1 IP> port=5432 dbname=bola_judge user=dashboard` (읽기 전용, 비밀번호는 `judge/.env`의 `PG_DASHBOARD_PASSWORD`)
 
 ## 알아 둘 점
 
 - 차단은 두 가지입니다. 탐지 엔진의 RATE 임시 차단(10초에 의심 요청 10번 초과 → 10분)과, 판단 서버의 **영구 차단**(100점 확정 → Redis `blocked:user:<id>`를 만료 없이, pc2 Kong이 403). 해제는 `judge/unblock.py` ([`judge/README.md`](judge/README.md) "영구 차단").
+- 점수는 기간 제한 없이 **영구 누적**합니다 (`judge/config.json` `window_sec: 0`). 판단 서버를 다시 시작하면 DB `bola_events`로 점수를 복원하므로, 점수를 처음부터 다시 쌓으려면 이 테이블을 비웁니다.
 - 공격자로 확정되면 `fluent-bit/confirmed.json`에 올라가고, `ledger_v2.py`가 장부를 학습할 때 그 요청·사용자를 뺍니다 (장부 오염 방지).
 - 자세한 내용은 [`fluent-bit/README.md`](fluent-bit/README.md), [`judge/README.md`](judge/README.md)

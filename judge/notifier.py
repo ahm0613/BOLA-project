@@ -5,7 +5,8 @@
   매시 정각에 직전 1시간 요약을 보냄.
 
   관리자 채널 (.env의 SLACK_ADMIN_WEBHOOK)
-    warning / attack  사용자 단계가 올라갈 때. 한 이벤트로 warning을 건너뛰고 attack이 되면 attack 하나만
+    high / attack     사용자 단계가 고위험(high)·차단(attack)으로 올라갈 때 (admin_levels).
+                      한 이벤트로 high를 건너뛰고 attack이 되면 attack 하나만
                       키 user:<id>:<단계>:r<해제 시각> → 사용자·단계마다 한 번 (관리자가 해제하면 다시 셈)
     rate              RATE 임시 차단. 키 rate:<id>:<날짜> → 사용자마다 하루 한 번 (반복 횟수는 요약에)
     release           unblock.py 실행 기록 (send_tool_alert)
@@ -34,15 +35,14 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import db
+from scoring import DEFAULT_LEVELS, level_label
 
 KST = timezone(timedelta(hours=9))
 HOUR_MS = 3600 * 1000
 WEBHOOK_ENV = {"admin": "SLACK_ADMIN_WEBHOOK", "dev": "SLACK_DEV_WEBHOOK"}
 CHANNEL_NAMES = {"admin": "관리자", "dev": "개발자"}
-DEFAULTS = {"enabled": True, "admin_levels": ["warning", "attack"], "rate": True, "quiet_days": 7,
+DEFAULTS = {"enabled": True, "admin_levels": ["high", "attack"], "rate": True, "quiet_days": 7,
             "summary": True, "summary_delay_sec": 30, "retries": 5, "timeout_sec": 10}
-LEVEL_RANK = {"attack": 3, "warning": 2, "watch": 1}
-LEVEL_LABEL = {3: "확정", 2: "warning", 1: "watch", 0: "normal"}
 SUMMARY_MAX_ROWS = 20                                   # 요약에 한 줄씩 보여 줄 최대 사용자·API 수
 
 SQL_UPSERT = """
@@ -67,7 +67,7 @@ SQL_SUMMARY_ADMIN = """
 SELECT user_id, count(*), max(risk_score),
        count(*) FILTER (WHERE action_type = 'RATE'),
        bool_or(action_id LIKE '%%L'),
-       max(CASE decision WHEN 'attack' THEN 3 WHEN 'warning' THEN 2 WHEN 'watch' THEN 1 ELSE 0 END)
+       array_agg(DISTINCT decision)
 FROM bola_events WHERE detected_at >= %s AND detected_at < %s
 GROUP BY user_id"""
 
@@ -160,7 +160,11 @@ class Notifier:
         self.released = released if released is not None else {}
         self.post, self.clock = post, clock
         self.threshold = cfg["threshold"]
-        self.level_need = dict(cfg.get("levels") or {"watch": 30, "warning": 60}, attack=cfg["threshold"])
+        self.level_need = dict(cfg.get("levels") or DEFAULT_LEVELS, attack=cfg["threshold"])
+        # 단계 코드 → 순번 (점수 낮은 순, normal 0). 1시간 요약에서 그 시간대 가장 높은 단계를 고를 때 씀
+        self.level_rank = {name: i + 1 for i, (name, _) in
+                           enumerate(sorted(self.level_need.items(), key=lambda x: x[1]))}
+        self.window_label = "누적" if not int(cfg.get("window_sec") or 0) else f"{int(cfg['window_sec']) // 3600}시간"
         self.rate_min = (cfg.get("db") or {}).get("rate_block_sec", 600) // 60
         self.quiet_ms = int(self.nc["quiet_days"] * 86400 * 1000)
         self.live = False                               # False: 과거 이벤트 복원 중 → API 시각만 기억하고 보내지 않음
@@ -223,7 +227,8 @@ class Notifier:
         d = d or {"score": t.get("total"), "breakdown": t.get("breakdown"), "victims": t.get("victims") or [],
                   "apis_hit": {}}
         lines = [f"[공격 확정] 사용자 {u} {action}",
-                 f"24시간 점수 {d['score']}/{self.threshold}점 ({fmt_breakdown(d['breakdown'])})",
+                 f"{self.window_label} 점수 {d['score']}/{self.threshold}점 = 위험도 100% "
+                 f"({fmt_breakdown(d['breakdown'])}, {self.threshold}점을 넘은 점수는 차단 근거)",
                  f"피해자 {', '.join(d['victims']) or '-'}"]
         lines += [f"털린 API {api}: {', '.join(v)}" for api, v in (d.get("apis_hit") or {}).items()]
         lines += [f"마지막 요청 {t['kind']} {t['status']} {t['uri']} ({fmt_time(t['ts'])})",
@@ -234,8 +239,9 @@ class Notifier:
 
     def _level_text(self, t, level):
         return "\n".join([
-            f"[주의 사용자] 사용자 {t['user_id']} {level} 단계 "
-            f"(24시간 점수 {t.get('total')}점, {level} 기준 {self.level_need.get(level)}점, 확정 {self.threshold}점)",
+            f"[주의 사용자] 사용자 {t['user_id']} {level_label(level)} 단계, 위험도 {t.get('risk_pct')}% "
+            f"({self.window_label} 점수 {t.get('total')}점, {level_label(level)} 기준 {self.level_need.get(level)}점, "
+            f"차단 {self.threshold}점)",
             f"내역 {fmt_breakdown(t.get('breakdown'))}",
             f"피해자 {', '.join(t.get('victims') or []) or '-'}",
             f"마지막 요청 {t['kind']} {t['status']} {t['uri']} ({fmt_time(t['ts'])})",
@@ -244,7 +250,7 @@ class Notifier:
     def _rate_text(self, t):
         return "\n".join([
             f"[임시 차단] 사용자 {t['user_id']} {self.rate_min}분 임시 차단 (탐지 엔진: 10초에 의심 요청이 몰림)",
-            f"24시간 점수 {t.get('total', t.get('score'))}점 | {t.get('detail') or ''}",
+            f"{self.window_label} 점수 {t.get('total', t.get('score'))}점 | {t.get('detail') or ''}",
             f"시각 {fmt_time(t['ts'])}. 오늘 이 사용자의 임시 차단은 더 알리지 않고 1시간 요약에 횟수로 표시합니다",
         ])
 
@@ -311,10 +317,18 @@ class Notifier:
         confirmed = sum(1 for r in rows if r[4])
         rates = sum(r[3] for r in rows)
         lines.append(f"의심 이벤트 {events}건, 사용자 {len(rows)}명 | 확정 {confirmed}명, 임시 차단 {rates}건")
-        watch = sorted((r for r in rows if r[4] or r[3] or (r[5] or 0) >= LEVEL_RANK["warning"]),
-                       key=lambda r: (-(3 if r[4] else (r[5] or 0)), -(r[2] or 0)))
-        for uid, _, score, rate, conf, rank in watch[:SUMMARY_MAX_ROWS]:
-            line = f"- 사용자 {uid}: {LEVEL_LABEL[3 if conf else (rank or 0)]} (최고 {score if score is not None else '-'}점)"
+        top = len(self.level_rank)                      # 차단(attack) 순번
+        # 그 시간대 판단 단계 중 가장 높은 것의 순번 (확정 조치가 있으면 차단)
+        rank = {r[0]: top if r[4] else max((self.level_rank.get(d, 0) for d in (r[5] or [])), default=0)
+                for r in rows}
+        alert_rank = min(self.level_rank.get(lv, top) for lv in self.nc["admin_levels"]) if self.nc["admin_levels"]             else top
+        watch = sorted((r for r in rows if r[4] or r[3] or rank[r[0]] >= alert_rank),
+                       key=lambda r: (-rank[r[0]], -(r[2] or 0)))
+        names = {i: name for name, i in self.level_rank.items()}
+        for uid, _, score, rate, conf, _ in watch[:SUMMARY_MAX_ROWS]:
+            pct = "-" if score is None else f"{min(100, int(score) * 100 // self.threshold)}%"
+            line = (f"- 사용자 {uid}: {level_label(names.get(rank[uid], 'normal'))} "
+                    f"(위험도 {pct}, 최고 {score if score is not None else '-'}점)")
             if rate:
                 line += f", 임시 차단 {rate}번"
             lines.append(line)

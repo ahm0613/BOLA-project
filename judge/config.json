@@ -15,10 +15,10 @@
   },
   "window_sec": 0,
   "threshold": 100,
-  "levels": {"watch": 30, "warning": 60},
+  "levels": {"caution": 10, "danger": 30, "high": 60},
   "db": {"enabled": true, "restore": true, "flush_sec": 1, "sweep_sec": 10, "rate_block_sec": 600},
   "block": {"enabled": true, "sync_sec": 60},
-  "notify": {"enabled": true, "admin_levels": ["warning", "attack"], "rate": true, "quiet_days": 7,
+  "notify": {"enabled": true, "admin_levels": ["high", "attack"], "rate": true, "quiet_days": 7,
              "summary": true, "summary_delay_sec": 30, "retries": 5, "timeout_sec": 10},
   "points": {
     "BOLA_PATH": 40,

@@ -28,7 +28,7 @@ MAX_PENDING = 10000                                     # DB가 오래 꺼져 �
 
 EVENT_COLUMNS = [
     "stream_id", "event_id", "event_at", "detected_at", "user_id", "action_type", "api_path", "detection_reasons",
-    "risk_score", "assessed_at", "decision", "decision_reason", "user_status", "user_status_updated_at",
+    "risk_score", "risk_pct", "assessed_at", "decision", "decision_reason", "user_status", "user_status_updated_at",
     "action_id", "action_reason", "decided_at", "enforcement_status", "enforced_at", "expires_at", "released_at",
 ]
 SQL_EVENT = (f"INSERT INTO bola_events ({', '.join(EVENT_COLUMNS)}) "
@@ -36,13 +36,16 @@ SQL_EVENT = (f"INSERT INTO bola_events ({', '.join(EVENT_COLUMNS)}) "
 
 # 상태 값이 바뀔 때만 user_status_updated_at을 갱신 (점수만 바뀌면 그대로)
 SQL_USER = """
-INSERT INTO user_status AS u (user_id, user_status, user_status_updated_at, risk_score, last_event_at, last_stream_id)
-VALUES (%(user_id)s, %(user_status)s, %(user_status_updated_at)s, %(risk_score)s, %(last_event_at)s, %(last_stream_id)s)
+INSERT INTO user_status AS u (user_id, user_status, user_status_updated_at, risk_score, risk_pct,
+                              last_event_at, last_stream_id)
+VALUES (%(user_id)s, %(user_status)s, %(user_status_updated_at)s, %(risk_score)s, %(risk_pct)s,
+        %(last_event_at)s, %(last_stream_id)s)
 ON CONFLICT (user_id) DO UPDATE SET
   user_status = EXCLUDED.user_status,
   user_status_updated_at = CASE WHEN u.user_status IS DISTINCT FROM EXCLUDED.user_status
                                 THEN EXCLUDED.user_status_updated_at ELSE u.user_status_updated_at END,
   risk_score = COALESCE(EXCLUDED.risk_score, u.risk_score),     -- 점수 계산이 없던 이벤트(확정 사용자)는 기존 점수 유지
+  risk_pct = COALESCE(EXCLUDED.risk_pct, u.risk_pct),           -- 위험도 0~100 (차단 기준 대비 비율, 차단이면 100). 이 SQL에는 퍼센트 기호를 쓰지 말 것 (psycopg 자리표시로 읽음)
   last_event_at = GREATEST(EXCLUDED.last_event_at, u.last_event_at),
   last_stream_id = EXCLUDED.last_stream_id"""
 
@@ -132,9 +135,9 @@ class DbWriter:
                 self.counts["dropped"] += 1
 
     def put_user(self, row):
-        """사용자 현재 상태. 같은 사용자의 이전 값은 덮어씀"""
+        """사용자 현재 상태. 같은 사용자의 이전 값은 덮어씀 (risk_pct가 없으면 NULL)"""
         with self.lock:
-            self.users[row["user_id"]] = row
+            self.users[row["user_id"]] = {"risk_pct": None, **row}
 
     def _run(self):
         """flush_sec마다 큐를 비워 씀. 실패하면 되돌려 놓고 다음에 다시 시도"""
