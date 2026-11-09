@@ -315,7 +315,7 @@ judge.py (총괄)  ── 이벤트를 받아 아래 담당들에게 넘기고 �
    ├─▶ store.py      확정되면 confirmed.json에 명단 기록
    ├─▶ blocker.py    확정된 공격자를 Redis에 영구 차단
    ├─▶ db.py         모든 결과를 PostgreSQL에 기록
-   └─▶ notifier.py   주의·확정·요약을 Slack으로 알림
+   └─▶ notifier.py   고위험·차단·요약을 Slack으로 알림
 ```
 
 | 파일 | 쉽게 말하면 | 하는 일 |
@@ -326,7 +326,7 @@ judge.py (총괄)  ── 이벤트를 받아 아래 담당들에게 넘기고 �
 | **`store.py`** | 확정 명단 담당 | 공격자로 확정된 사용자·요청을 `confirmed.json`에 쓰고 읽습니다. 관리자 해제(`released`)도 여기서 관리합니다. 이 파일 덕에 장부 학습이 공격 기록을 빼고 할 수 있습니다. |
 | **`blocker.py`** | 차단 집행관 | 확정된 공격자를 Redis `blocked:user:<id>`에 **만료 없이** 걸어 pc2 Kong이 403으로 막게 합니다. 명단과 Redis가 어긋나면 다시 맞춥니다(동기화). |
 | **`db.py`** | 기록 보관 담당 | 모든 이벤트·상태·조치를 PostgreSQL에 저장합니다. 느린 DB가 판단을 막지 않게 **모아서 비동기로 쓰고**, 실패하면 다시 시도합니다. pc3 대시보드가 이 기록을 읽습니다. |
-| **`notifier.py`** | 연락 담당 | 주의 사용자(관리자 채널), 취약 API(개발자 채널), 매시 1시간 요약을 Slack으로 보냅니다. Slack이 느려도 판단을 막지 않게 **큐에 넣고 따로 보냅니다**. |
+| **`notifier.py`** | 연락 담당 | 고위험·차단 사용자(관리자 채널), 취약 API(개발자 채널), 매시 1시간 요약을 Slack으로 보냅니다. Slack이 느려도 판단을 막지 않게 **큐에 넣고 따로 보냅니다**. |
 
 > 설계 포인트: `scoring.py`는 "판단 규칙"만, `judge.py`는 "입출력·연결"만 담당하도록 나눠 두었습니다. 그래서 규칙을 바꿔도 Redis/DB 코드를 건드릴 필요가 없고, 규칙만 따로 테스트할 수 있습니다.
 
@@ -346,8 +346,9 @@ judge.py (총괄)  ── 이벤트를 받아 아래 담당들에게 넘기고 �
 | `api_infer.py` | 1대1 추론: 학습 장부로 `path_owners`를 만듦 (`"auto"`일 때) |
 | `store.py` | `confirmed.json` 읽기·쓰기(해제 포함), 확정 근거 기록 |
 | `blocker.py` | Redis 영구 차단 키 걸기·명단 동기화·해제 |
-| `notifier.py` | Slack 알림: 관리자(주의 사용자), 개발자(취약 API), 1시간 요약, 시험(`--test`) |
+| `notifier.py` | Slack 알림: 관리자(고위험·차단 사용자), 개발자(취약 API), 1시간 요약, 시험(`--test`) |
 | `db/migrate/03-alerts.sql` | 이미 쓰는 DB에 `alerts` 테이블 추가 |
+| `db/migrate/04-risk.sql` | 이미 쓰는 DB에 `risk_pct` 열 추가, 단계 이름 변경(watch → danger, warning → high) |
 | `unblock.py` | 관리자용: 차단 목록 보기(`--list`), 영구 차단 해제 (판단 서버를 멈춘 뒤) |
 | `config.json` | Redis 주소, 점수, 기준, 시간 창, 경로, 영구 차단(`block`) |
 | `.env` | Redis·DB 비밀번호, Slack 웹훅 주소 (git 제외) |

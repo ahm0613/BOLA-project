@@ -15,7 +15,7 @@ DB 기록 (pc3 Streamlit용, db.py): Redis 이벤트 한 건마다 bola_events �
   실시간 모드에서는 시작할 때와 block.sync_sec마다 confirmed.json 명단과 Redis 차단 키를 맞춤 (빠진 키를 다시 걺).
   --dry-run이면 차단하지 않음. 해제는 unblock.py.
 
-Slack 알림 (notifier.py, config.json의 notify): 관리자에게 주의 사용자(고위험, 확정, RATE), 개발자에게 취약 API,
+Slack 알림 (notifier.py, config.json의 notify): 관리자에게 고위험·차단 사용자와 RATE, 개발자에게 취약 API,
   매시 정각 1시간 요약. 웹훅 주소는 .env의 SLACK_ADMIN_WEBHOOK, SLACK_DEV_WEBHOOK. 복원 중, --once, --dry-run이면 보내지 않음.
 
 점수 복원: 시작할 때 과거 이벤트를 다시 채점한 뒤, 그 다음 이벤트부터 그룹으로 받는다.

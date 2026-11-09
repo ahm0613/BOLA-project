@@ -333,7 +333,8 @@ parse_event → Judge.process   (scoring.py)
     <h4>process(): 단계와 확정</h4>
     <ul>
       <li>사용자별 이벤트 큐(<code>recent</code>)에 넣고 합계를 냅니다. <b><code>window_sec: 0</code>이면 오래된 이벤트를 빼지 않고 영구 누적</b>합니다.</li>
-      <li>단계: <code>normal</code> → <code>watch</code>(30) → <code>warning</code>(60) → <code>attack</code>(100, 확정). 단계는 올라가기만 합니다.</li>
+      <li>단계: 정상 <code>normal</code> → 주의 <code>caution</code>(10) → 위험 <code>danger</code>(30) → 고위험 <code>high</code>(60) → 차단 <code>attack</code>(100, 확정). 단계는 올라가기만 합니다.</li>
+      <li>위험도(<code>risk_pct</code>) = min(점수 ÷ 100, 1) × 100%. 화면과 알림에는 이 값을 보여 주고, 100을 넘는 점수는 차단 근거(<code>risk_score</code>)로만 남깁니다.</li>
       <li>URL로 확인된 BOLA(<code>BOLA_PATH</code>)는 사용자 확정과 상관없이 그 <b>요청</b>을 바로 확정합니다.</li>
       <li>100점 이상이면 <b>사용자</b>를 확정합니다. 확정된 뒤의 이벤트는 점수를 계산하지 않고 요청 ID만 추가합니다.</li>
       <li>관리자가 해제한 시각(<code>released</code>) 이전의 이벤트는 채점하지 않습니다.</li>
@@ -418,15 +419,15 @@ block:info:7     {reason, blocked_at, by}           ← 사람이 확인하는 �
       <div class="what"><code>XREADGROUP</code>으로 수신 → <code>parse_event</code> → <code>Judge.process</code></div></li>
     <li><span class="n">5</span><div class="where">scoring.py · classify</div>
       <div class="what"><code>/members/{id}</code>는 api_infer가 1대1로 추론한 API → <code>BOLA_PATH</code> +40, 피해자 3</div>
-      <p>URL로 확인된 BOLA라서 이 요청은 바로 <code>requests</code>에 확정됩니다(store.py). 점수 40 → <code>watch</code>. 이 API에서 처음 성공한 BOLA라면 notifier.py가 개발자 채널에 "GET /members/{id} 취약" 알림을 보냅니다.</p></li>
+      <p>URL로 확인된 BOLA라서 이 요청은 바로 <code>requests</code>에 확정됩니다(store.py). 점수 40 → 위험도 40% <code>danger</code>(위험). 이 API에서 처음 성공한 BOLA라면 notifier.py가 개발자 채널에 "GET /members/{id} 취약" 알림을 보냅니다.</p></li>
     <li><span class="n">6</span><div class="where">두 번째 요청 /members/4</div>
-      <div class="what">80점 → <code>warning</code> 단계로 올라감</div>
-      <p>notifier.py가 관리자 채널에 warning 알림을 큐에 넣습니다 (사용자·단계마다 한 번).</p></li>
+      <div class="what">80점 → 위험도 80% <code>high</code>(고위험) 단계로 올라감</div>
+      <p>notifier.py가 관리자 채널에 고위험 알림을 큐에 넣습니다 (사용자·단계마다 한 번).</p></li>
     <li><span class="n">7</span><div class="where">세 번째 요청 /members/5</div>
-      <div class="what">40×3 = 120 + 피해자 3명 보너스 30 = <b>150점 → 확정</b></div>
+      <div class="what">40×3 = 120 + 피해자 3명 보너스 30 = <b>150점 → 위험도 100% 확정</b></div>
       <p>store.py가 <code>confirmed.json</code>의 <code>users</code>에 7을 추가하고 <code>confirmed_log.jsonl</code>에 근거를 남깁니다. blocker.py는 <code>blocked:user:7</code>을 영구로 겁니다. notifier.py는 관리자 채널에 확정과 영구 차단 결과를 알립니다.</p></li>
     <li><span class="n">8</span><div class="where">db.py · 저장 스레드 (1초 안)</div>
-      <div class="what"><code>bola_events</code> 3행 + <code>user_status</code> 사용자 7 = <code>confirmed</code>, 150점</div>
+      <div class="what"><code>bola_events</code> 3행 + <code>user_status</code> 사용자 7 = <code>confirmed</code>, 위험도 100%, 차단 근거 150점</div>
       <p>마지막 행에 조치 <code>AC-&lt;스트림ID&gt;-L applied</code>가 기록됩니다.</p></li>
     <li><span class="n">9</span><div class="where">pc2 Kong</div>
       <div class="what">사용자 7의 다음 요청부터 403 <code>blocked by security policy</code></div>
@@ -436,16 +437,16 @@ block:info:7     {reason, blocked_at, by}           ← 사람이 확인하는 �
   </ol>
 
   <div class="score">
-    <div class="scale"><div></div><div><i style="left:20%">30 watch</i><i style="left:40%">60 warning</i><i style="left:66.7%">100 확정</i></div><div></div></div>
-    <div class="row"><div>/members/3</div><div class="bar"><span style="width:26.7%;background:var(--accent)"></span></div><div class="lv" style="color:var(--accent)">40 watch</div></div>
-    <div class="row"><div>/members/4</div><div class="bar"><span style="width:53.3%;background:var(--warn)"></span></div><div class="lv" style="color:var(--warn)">80 warning</div></div>
-    <div class="row"><div>/members/5</div><div class="bar"><span style="width:100%;background:var(--bad)"></span></div><div class="lv" style="color:var(--bad)">150 확정</div></div>
+    <div class="scale"><div></div><div><i style="left:6.7%">10 주의</i><i style="left:20%">30 위험</i><i style="left:40%">60 고위험</i><i style="left:66.7%">100 차단</i></div><div></div></div>
+    <div class="row"><div>/members/3</div><div class="bar"><span style="width:26.7%;background:var(--accent)"></span></div><div class="lv" style="color:var(--accent)">40점 · 40% 위험</div></div>
+    <div class="row"><div>/members/4</div><div class="bar"><span style="width:53.3%;background:var(--warn)"></span></div><div class="lv" style="color:var(--warn)">80점 · 80% 고위험</div></div>
+    <div class="row"><div>/members/5</div><div class="bar"><span style="width:100%;background:var(--bad)"></span></div><div class="lv" style="color:var(--bad)">150점 · 100% 차단</div></div>
   </div>
 
 <pre>judge 로그
-[점수] 15:10:02 사용자 7 BOLA 200 /members/3 → BOLA_PATH +40 = 40/100점 {'BOLA_PATH': 40} 피해자 ['3']
-[점수] 15:10:05 사용자 7 BOLA 200 /members/4 → BOLA_PATH +40 = 80/100점 {'BOLA_PATH': 80} 피해자 ['3', '4']
-[점수] 15:10:09 사용자 7 BOLA 200 /members/5 → BOLA_PATH +40 = 150/100점 {'BOLA_PATH': 120, '+victims': 30} …  ★ 확정
+[점수] 15:10:02 사용자 7 BOLA 200 /members/3 → BOLA_PATH +40 = 40/100점 (위험도 40% 위험) {'BOLA_PATH': 40} 피해자 ['3']
+[점수] 15:10:05 사용자 7 BOLA 200 /members/4 → BOLA_PATH +40 = 80/100점 (위험도 80% 고위험) {'BOLA_PATH': 80} 피해자 ['3', '4']
+[점수] 15:10:09 사용자 7 BOLA 200 /members/5 → BOLA_PATH +40 = 150/100점 (위험도 100% 차단) {'BOLA_PATH': 120, '+victims': 30} …  ★ 확정
 [확정] 사용자 7 점수 150 {'BOLA_PATH': 120, '+victims': 30} 피해자 ['3', '4', '5'] 요청 3건
         털린 API: GET /members/{id} {3,4,5}</pre>
 
@@ -460,7 +461,7 @@ block:info:7     {reason, blocked_at, by}           ← 사람이 확인하는 �
     <div class="tablewrap">
     <table>
       <tr><th>채널</th><th>종류</th><th>언제</th><th>중복 방지 키</th></tr>
-      <tr><td>관리자</td><td>warning / attack</td><td>사용자 단계가 올라갈 때</td><td><code>user:7:attack:r&lt;해제시각&gt;</code></td></tr>
+      <tr><td>관리자</td><td>high(고위험) / attack(차단)</td><td>사용자 단계가 올라갈 때</td><td><code>user:7:attack:r&lt;해제시각&gt;</code></td></tr>
       <tr><td>관리자</td><td>rate</td><td>RATE 임시 차단</td><td>사용자마다 하루 한 번</td></tr>
       <tr><td>관리자</td><td>release</td><td><code>unblock.py</code> 실행</td><td>-</td></tr>
       <tr><td>개발자</td><td>api</td><td>API에서 BOLA가 처음 성공, 또는 7일 동안 조용하다가 다시 성공 (사용자 번호는 넣지 않음)</td><td>API + 시각</td></tr>
