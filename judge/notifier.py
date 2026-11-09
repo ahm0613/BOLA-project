@@ -239,7 +239,7 @@ class Notifier:
 
     def _level_text(self, t, level):
         return "\n".join([
-            f"[주의 사용자] 사용자 {t['user_id']} {level_label(level)} 단계, 위험도 {t.get('risk_pct')}% "
+            f"[위험 사용자] 사용자 {t['user_id']} {level_label(level)} 단계, 위험도 {t.get('risk_pct')}% "
             f"({self.window_label} 점수 {t.get('total')}점, {level_label(level)} 기준 {self.level_need.get(level)}점, "
             f"차단 {self.threshold}점)",
             f"내역 {fmt_breakdown(t.get('breakdown'))}",
@@ -309,7 +309,7 @@ class Notifier:
         return "\n".join(lines)
 
     def admin_summary_text(self, label, rows):
-        lines = [f"[주의 사용자 1시간 요약] {label}"]
+        lines = [f"[위험 사용자 1시간 요약] {label}"]
         if rows is None:
             lines.append(self._no_db())
             return "\n".join(lines)
@@ -335,7 +335,7 @@ class Notifier:
         if len(watch) > SUMMARY_MAX_ROWS:
             lines.append(f"- 외 {len(watch) - SUMMARY_MAX_ROWS}명")
         if not watch:
-            lines.append("- 주의 사용자 없음 (이상 없음)")
+            lines.append("- 위험 사용자 없음 (이상 없음)")
         return "\n".join(lines)
 
     # ------------------------------------------------------------ 큐와 보내기

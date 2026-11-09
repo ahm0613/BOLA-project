@@ -237,7 +237,7 @@ class NotifierTest(unittest.TestCase):
         self.n.run_pending()
         self.assertEqual((len(self.post.to("dev")), len(self.post.to("admin"))), (1, 1))
         self.assertIn("이 시간에 털린 API 없음", self.post.to("dev")[0])
-        self.assertIn("주의 사용자 없음 (이상 없음)", self.post.to("admin")[0])
+        self.assertIn("위험 사용자 없음 (이상 없음)", self.post.to("admin")[0])
 
     def test_summary_text(self):
         """요약 글: 확정·고위험·RATE 사용자만 한 줄씩, DB 실패 안내"""
